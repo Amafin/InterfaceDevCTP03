@@ -1,234 +1,111 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scène A-Frame - Physique & Collisions complètes</title>
-  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-  <!-- Cannon.js pour A-Frame -->
-  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
+AFRAME.registerComponent('physics-grabber', {
+  schema: {
+    throwMultiplier: { type: 'number', default: 1.4 }
+  },
 
-  <script>
-    // -------------------------------------------------------------
-    // Déplacement et vue aux sticks
-    // -------------------------------------------------------------
-    AFRAME.registerComponent('vr-player', {
-      schema: {
-        speed: {type: 'number', default: 3},
-        turnSpeed: {type: 'number', default: 2},
-        elevateSpeed: {type: 'number', default: 2}
-      },
+  init: function () {
+    this.grabbedEl = null;
+    this.targetEl = null;
 
-      init: function () {
-        this.moveAxis = [0, 0];
-        this.turnAxis = 0;
-        this.elevateAxis = 0;
+    this.positions = [];
+    this.handWorldPos = new THREE.Vector3();
+    this.handWorldQuat = new THREE.Quaternion();
 
-        this.onMove = (e) => {
-          this.moveAxis = [e.detail.x || 0, e.detail.y || 0];
-        };
-        this.onRightStick = (e) => {
-          this.turnAxis = e.detail.x || 0;
-          this.elevateAxis = e.detail.y || 0;
-        };
+    // Vecteurs pour préserver le décalage relatif
+    this.holdOffsetPos = new THREE.Vector3();
+    this.holdOffsetQuat = new THREE.Quaternion();
+    this.targetWorldPos = new THREE.Vector3();
+    this.targetWorldQuat = new THREE.Quaternion();
 
-        this.leftController = this.el.querySelector('#left-controller');
-        this.rightController = this.el.querySelector('#right-controller');
-        this.camera = this.el.querySelector('a-camera');
-
-        this.leftController.addEventListener('thumbstickmoved', this.onMove);
-        this.rightController.addEventListener('thumbstickmoved', this.onRightStick);
-      },
-
-      tick: function (time, delta) {
-        const dt = Math.min(delta, 100) / 1000;
-
-        if (Math.abs(this.turnAxis) > 0.1) {
-          this.el.object3D.rotation.y -= this.turnAxis * this.data.turnSpeed * dt;
-        }
-        if (Math.abs(this.elevateAxis) > 0.1) {
-          this.el.object3D.position.y -= this.elevateAxis * this.data.elevateSpeed * dt;
-        }
-
-        const moveX = this.moveAxis[0];
-        const moveZ = this.moveAxis[1];
-        if (Math.abs(moveX) > 0.1 || Math.abs(moveZ) > 0.1) {
-          const camYaw = this.camera ? this.camera.object3D.rotation.y : 0;
-          const totalYaw = this.el.object3D.rotation.y + camYaw;
-          const dist = this.data.speed * dt;
-
-          this.el.object3D.position.x += (moveX * Math.cos(totalYaw) + moveZ * Math.sin(totalYaw)) * dist;
-          this.el.object3D.position.z += (-moveX * Math.sin(totalYaw) + moveZ * Math.cos(totalYaw)) * dist;
-        }
-      }
+    // Détection laser (1.5 m)
+    this.el.addEventListener('raycaster-intersection', (e) => {
+      const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
+      if (valid.length > 0) this.targetEl = valid[0];
     });
 
-    // -------------------------------------------------------------
-    // Gestion du Grab cinématique & Lancer réaliste
-    // -------------------------------------------------------------
-    AFRAME.registerComponent('physics-grabber', {
-      schema: {
-        throwMultiplier: { type: 'number', default: 1.4 } // Facteur d'élan au lancer
-      },
+    this.el.addEventListener('raycaster-intersection-cleared', () => {
+      this.targetEl = null;
+    });
 
-      init: function () {
-        this.grabbedEl = null;
-        this.targetEl = null;
+    // Début de la saisie : calcul de l'écart initial (offset)
+    const onGrab = () => {
+      if (!this.targetEl || this.grabbedEl) return;
+      this.grabbedEl = this.targetEl;
+      this.positions = [];
 
-        // Suivi de trajectoire pour calculer la vitesse réelle du lancer
-        this.positions = [];
-        this.handWorldPos = new THREE.Vector3();
-        this.handWorldQuat = new THREE.Quaternion();
+      // Positions et rotations mondiales actuelles
+      this.el.object3D.getWorldPosition(this.handWorldPos);
+      this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
-        // Détection laser (limité à 1.5 mètre)
-        this.el.addEventListener('raycaster-intersection', (e) => {
-          const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
-          if (valid.length > 0) this.targetEl = valid[0];
-        });
+      this.grabbedEl.object3D.getWorldPosition(this.targetWorldPos);
+      this.grabbedEl.object3D.getWorldQuaternion(this.targetWorldQuat);
 
-        this.el.addEventListener('raycaster-intersection-cleared', () => {
-          this.targetEl = null;
-        });
+      // Calcul du décalage relatif exprimé dans le repère local de la main
+      const invHandQuat = this.handWorldQuat.clone().invert();
 
-        // Début de la saisie
-        const onGrab = () => {
-          if (!this.targetEl || this.grabbedEl) return;
-          this.grabbedEl = this.targetEl;
-          this.positions = [];
-        };
+      this.holdOffsetPos.subVectors(this.targetWorldPos, this.handWorldPos).applyQuaternion(invHandQuat);
+      this.holdOffsetQuat.copy(invHandQuat).multiply(this.targetWorldQuat);
+    };
 
-        // Fin de la saisie / Lancer
-        const onRelease = () => {
-          if (!this.grabbedEl) return;
-          const body = this.grabbedEl.body;
+    // Relâchement et lancer
+    const onRelease = () => {
+      if (!this.grabbedEl) return;
+      const body = this.grabbedEl.body;
 
-          if (body && this.positions.length >= 2) {
-            // Moyenne de la vélocité sur les dernières frames enregistrées
-            const oldest = this.positions[0];
-            const newest = this.positions[this.positions.length - 1];
-            const totalDt = (newest.time - oldest.time) / 1000;
+      if (body && this.positions.length >= 2) {
+        const oldest = this.positions[0];
+        const newest = this.positions[this.positions.length - 1];
+        const totalDt = (newest.time - oldest.time) / 1000;
 
-            if (totalDt > 0.01) {
-              const vx = ((newest.pos.x - oldest.pos.x) / totalDt) * this.data.throwMultiplier;
-              const vy = ((newest.pos.y - oldest.pos.y) / totalDt) * this.data.throwMultiplier;
-              const vz = ((newest.pos.z - oldest.pos.z) / totalDt) * this.data.throwMultiplier;
+        if (totalDt > 0.01) {
+          const vx = ((newest.pos.x - oldest.pos.x) / totalDt) * this.data.throwMultiplier;
+          const vy = ((newest.pos.y - oldest.pos.y) / totalDt) * this.data.throwMultiplier;
+          const vz = ((newest.pos.z - oldest.pos.z) / totalDt) * this.data.throwMultiplier;
 
-              body.velocity.set(vx, vy, vz);
-            }
-          }
-
-          this.grabbedEl = null;
-          this.positions = [];
-        };
-
-        this.el.addEventListener('triggerdown', onGrab);
-        this.el.addEventListener('gripdown', onGrab);
-        this.el.addEventListener('triggerup', onRelease);
-        this.el.addEventListener('gripup', onRelease);
-      },
-
-      tick: function (time, delta) {
-        // Acquisition de la position globale de la manette
-        this.el.object3D.getWorldPosition(this.handWorldPos);
-        this.el.object3D.getWorldQuaternion(this.handWorldQuat);
-
-        // Historique glissant pour le calcul de vélocité
-        this.positions.push({
-          pos: this.handWorldPos.clone(),
-          time: performance.now()
-        });
-        if (this.positions.length > 6) {
-          this.positions.shift();
-        }
-
-        // Déplacement du corps physique vers la main
-        if (this.grabbedEl && this.grabbedEl.body) {
-          const body = this.grabbedEl.body;
-
-          // Déplace le corps Cannon.js : les collisions restent actives en direct
-          body.position.set(this.handWorldPos.x, this.handWorldPos.y, this.handWorldPos.z);
-          body.quaternion.set(this.handWorldQuat.x, this.handWorldQuat.y, this.handWorldQuat.z, this.handWorldQuat.w);
-
-          // Réinitialise la vélocité résiduelle pendant la prise
-          body.velocity.set(0, 0, 0);
-          body.angularVelocity.set(0, 0, 0);
+          body.velocity.set(vx, vy, vz);
         }
       }
+
+      this.grabbedEl = null;
+      this.positions = [];
+    };
+
+    this.el.addEventListener('triggerdown', onGrab);
+    this.el.addEventListener('gripdown', onGrab);
+    this.el.addEventListener('triggerup', onRelease);
+    this.el.addEventListener('gripup', onRelease);
+  },
+
+  tick: function (time, delta) {
+    this.el.object3D.getWorldPosition(this.handWorldPos);
+    this.el.object3D.getWorldQuaternion(this.handWorldQuat);
+
+    // Historique glissant pour le lancer
+    this.positions.push({
+      pos: this.handWorldPos.clone(),
+      time: performance.now()
     });
-  </script>
-</head>
-<body>
-  <a-scene physics="debug: false; gravity: -9.8" renderer="shadows: enabled" background="color: #87ceeb">
+    if (this.positions.length > 6) {
+      this.positions.shift();
+    }
 
-    <a-entity light="type: ambient; color: #ffffff; intensity: 0.6"></a-entity>
-    <a-entity
-      light="type: directional; color: #ffffff; intensity: 1.2; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048"
-      position="-3 6 4">
-    </a-entity>
+    // Déplacement de l'objet avec conservation de l'offset
+    if (this.grabbedEl && this.grabbedEl.body) {
+      const body = this.grabbedEl.body;
 
-    <!-- Sol statique -->
-    <a-plane
-      static-body
-      position="0 0 0"
-      rotation="-90 0 0"
-      width="30"
-      height="30"
-      color="#6b8e23"
-      shadow="receive: true">
-    </a-plane>
+      // Applique la rotation de la main à l'offset initial
+      const currentOffset = this.holdOffsetPos.clone().applyQuaternion(this.handWorldQuat);
+      const newPos = this.handWorldPos.clone().add(currentOffset);
 
-    <!-- Objets interactifs -->
-    <a-box
-      class="grabbable"
-      dynamic-body="mass: 2; shape: box"
-      position="-0.6 1.5 -1.2"
-      rotation="0 15 0"
-      width="0.5" height="0.5" depth="0.5"
-      color="#e74c3c"
-      shadow="cast: true; receive: true">
-    </a-box>
+      // Met à jour la position du corps Cannon.js
+      body.position.set(newPos.x, newPos.y, newPos.z);
 
-    <a-box
-      class="grabbable"
-      dynamic-body="mass: 2; shape: box"
-      position="-0.6 0.5 -1.2"
-      rotation="0 15 0"
-      width="0.5" height="0.5" depth="0.5"
-      color="#f39c12"
-      shadow="cast: true; receive: true">
-    </a-box>
+      // Met à jour la rotation en combinant celle de la main et l'orientation initiale
+      const newQuat = this.handWorldQuat.clone().multiply(this.holdOffsetQuat);
+      body.quaternion.set(newQuat.x, newQuat.y, newQuat.z, newQuat.w);
 
-    <a-sphere
-      class="grabbable"
-      dynamic-body="mass: 2; shape: sphere"
-      position="0.6 1.2 -1.2"
-      radius="0.3"
-      color="#3498db"
-      shadow="cast: true; receive: true">
-    </a-sphere>
-
-    <!-- Rig du joueur -->
-    <a-entity id="player" vr-player position="0 0 1.2">
-      <a-camera position="0 1.6 0"></a-camera>
-
-      <!-- Portée du laser réduite à 1.5 m (far: 1.5) -->
-      <a-entity
-        id="left-controller"
-        physics-grabber
-        oculus-touch-controls="hand: left"
-        laser-controls="hand: left"
-        raycaster="objects: .grabbable; far: 1.5">
-      </a-entity>
-
-      <a-entity
-        id="right-controller"
-        physics-grabber
-        oculus-touch-controls="hand: right"
-        laser-controls="hand: right"
-        raycaster="objects: .grabbable; far: 1.5">
-      </a-entity>
-    </a-entity>
-
-  </a-scene>
-</body>
-</html>
+      body.velocity.set(0, 0, 0);
+      body.angularVelocity.set(0, 0, 0);
+    }
+  }
+});
