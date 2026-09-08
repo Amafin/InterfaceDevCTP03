@@ -3,111 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scène A-Frame - Grab & Release</title>
+  <title>Scène A-Frame - Physique & Lancer</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <!-- Moteur physique Cannon.js compatible A-Frame -->
+  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
   <script>
     // -------------------------------------------------------------
-    // Composant de gravité pour les objets détachés
-    // -------------------------------------------------------------
-    AFRAME.registerComponent('grabbable-physics', {
-      schema: {
-        floorY: { type: 'number', default: 0 },
-        gravity: { type: 'number', default: -9.8 },
-        bounce: { type: 'number', default: 0.25 }
-      },
-
-      init: function () {
-        this.isGrabbed = false;
-        this.velocityY = 0;
-        // Hauteur de base de l'objet par rapport à son centre
-        const geometry = this.el.getAttribute('geometry') || {};
-        this.halfHeight = (geometry.height ? geometry.height / 2 : (geometry.radius || 0.5));
-      },
-
-      tick: function (time, delta) {
-        if (this.isGrabbed) return;
-
-        const dt = Math.min(delta, 100) / 1000;
-        const pos = this.el.object3D.position;
-        const targetFloor = this.data.floorY + this.halfHeight;
-
-        // Si l'objet est au-dessus du sol, il tombe
-        if (pos.y > targetFloor) {
-          this.velocityY += this.data.gravity * dt;
-          pos.y += this.velocityY * dt;
-
-          // Impact avec le sol
-          if (pos.y <= targetFloor) {
-            pos.y = targetFloor;
-            if (Math.abs(this.velocityY) > 1) {
-              this.velocityY = -this.velocityY * this.data.bounce; // rebond
-            } else {
-              this.velocityY = 0;
-            }
-          }
-        }
-      }
-    });
-
-    // -------------------------------------------------------------
-    // Composant de la main : saisie (Grab) et relâchement (Release)
-    // -------------------------------------------------------------
-    AFRAME.registerComponent('hand-grabber', {
-      init: function () {
-        this.grabbedEl = null;
-        this.targetEl = null;
-
-        // Détection de l'objet visé par le raycaster
-        this.el.addEventListener('raycaster-intersection', (e) => {
-          const validEls = e.detail.els.filter(el => el.classList.contains('grabbable'));
-          if (validEls.length > 0) {
-            this.targetEl = validEls[0];
-          }
-        });
-
-        this.el.addEventListener('raycaster-intersection-cleared', () => {
-          this.targetEl = null;
-        });
-
-        // Début de la saisie (Trigger ou Grip)
-        const onGrabStart = () => {
-          if (!this.targetEl || this.grabbedEl) return;
-
-          this.grabbedEl = this.targetEl;
-          const phys = this.grabbedEl.components['grabbable-physics'];
-          if (phys) phys.isGrabbed = true;
-
-          // Attache l'objet directement au contrôleur (suit la main)
-          this.grabbedEl.sceneEl.object3D.attach(this.grabbedEl.object3D); // préserve la position mondiale
-          this.el.object3D.attach(this.grabbedEl.object3D);
-        };
-
-        // Relâchement (Release)
-        const onGrabEnd = () => {
-          if (!this.grabbedEl) return;
-
-          const phys = this.grabbedEl.components['grabbable-physics'];
-          if (phys) {
-            phys.isGrabbed = false;
-            phys.velocityY = 0; // commence sa chute
-          }
-
-          // Détache de la main et remet dans la scène globale
-          this.el.sceneEl.object3D.attach(this.grabbedEl.object3D);
-          this.grabbedEl = null;
-        };
-
-        // Écoute de la gâchette et du bouton grip
-        this.el.addEventListener('triggerdown', onGrabStart);
-        this.el.addEventListener('gripdown', onGrabStart);
-        this.el.addEventListener('triggerup', onGrabEnd);
-        this.el.addEventListener('gripup', onGrabEnd);
-      }
-    });
-
-    // -------------------------------------------------------------
-    // Composant du joueur (Déplacement + Orientation Joysticks)
+    // Contrôle de la vue et déplacement aux joysticks
     // -------------------------------------------------------------
     AFRAME.registerComponent('vr-player', {
       schema: {
@@ -121,13 +24,12 @@
         this.turnAxis = 0;
         this.elevateAxis = 0;
 
-        this.onMove = (event) => {
-          this.moveAxis = [event.detail.x || 0, event.detail.y || 0];
+        this.onMove = (e) => {
+          this.moveAxis = [e.detail.x || 0, e.detail.y || 0];
         };
-
-        this.onRightStick = (event) => {
-          this.turnAxis = event.detail.x || 0;
-          this.elevateAxis = event.detail.y || 0;
+        this.onRightStick = (e) => {
+          this.turnAxis = e.detail.x || 0;
+          this.elevateAxis = e.detail.y || 0;
         };
 
         this.leftController = this.el.querySelector('#left-controller');
@@ -139,98 +41,183 @@
       },
 
       tick: function (time, delta) {
-        const elapsed = Math.min(delta, 100) / 1000;
+        const dt = Math.min(delta, 100) / 1000;
 
-        // Joystick droit : Tourner vue + Monter / Descendre
         if (Math.abs(this.turnAxis) > 0.1) {
-          this.el.object3D.rotation.y -= this.turnAxis * this.data.turnSpeed * elapsed;
+          this.el.object3D.rotation.y -= this.turnAxis * this.data.turnSpeed * dt;
         }
         if (Math.abs(this.elevateAxis) > 0.1) {
-          this.el.object3D.position.y -= this.elevateAxis * this.data.elevateSpeed * elapsed;
+          this.el.object3D.position.y -= this.elevateAxis * this.data.elevateSpeed * dt;
         }
 
-        // Joystick gauche : Déplacement horizontal relatif au casque
         const moveX = this.moveAxis[0];
         const moveZ = this.moveAxis[1];
-
         if (Math.abs(moveX) > 0.1 || Math.abs(moveZ) > 0.1) {
           const camYaw = this.camera ? this.camera.object3D.rotation.y : 0;
           const totalYaw = this.el.object3D.rotation.y + camYaw;
-          const distance = this.data.speed * elapsed;
+          const dist = this.data.speed * dt;
 
-          this.el.object3D.position.x += (moveX * Math.cos(totalYaw) + moveZ * Math.sin(totalYaw)) * distance;
-          this.el.object3D.position.z += (-moveX * Math.sin(totalYaw) + moveZ * Math.cos(totalYaw)) * distance;
+          this.el.object3D.position.x += (moveX * Math.cos(totalYaw) + moveZ * Math.sin(totalYaw)) * dist;
+          this.el.object3D.position.z += (-moveX * Math.sin(totalYaw) + moveZ * Math.cos(totalYaw)) * dist;
         }
+      }
+    });
+
+    // -------------------------------------------------------------
+    // Composant de lancer & saisie avec calcul de vélocité
+    // -------------------------------------------------------------
+    AFRAME.registerComponent('physics-thrower', {
+      init: function () {
+        this.grabbedEl = null;
+        this.targetEl = null;
+
+        // Historique de positions mondiales pour calculer la vitesse du lancer
+        this.prevPos = new THREE.Vector3();
+        this.currPos = new THREE.Vector3();
+        this.velocity = new THREE.Vector3();
+
+        // Détection laser
+        this.el.addEventListener('raycaster-intersection', (e) => {
+          const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
+          if (valid.length > 0) this.targetEl = valid[0];
+        });
+
+        this.el.addEventListener('raycaster-intersection-cleared', () => {
+          this.targetEl = null;
+        });
+
+        // Début saisie (Trigger ou Grip)
+        const grabStart = () => {
+          if (!this.targetEl || this.grabbedEl) return;
+          this.grabbedEl = this.targetEl;
+
+          // Désactive la simulation physique pendant la tenue en main
+          if (this.grabbedEl.body) {
+            this.grabbedEl.body.mass = 0;
+            this.grabbedEl.body.updateMassProperties();
+            this.grabbedEl.body.velocity.set(0, 0, 0);
+            this.grabbedEl.body.angularVelocity.set(0, 0, 0);
+          }
+
+          // Lie l'objet au contrôleur
+          this.grabbedEl.sceneEl.object3D.attach(this.grabbedEl.object3D);
+          this.el.object3D.attach(this.grabbedEl.object3D);
+        };
+
+        // Relâchement et lancer
+        const grabEnd = () => {
+          if (!this.grabbedEl) return;
+
+          // Replace l'objet dans la scène globale
+          this.el.sceneEl.object3D.attach(this.grabbedEl.object3D);
+
+          const el = this.grabbedEl;
+          const body = el.body;
+
+          if (body) {
+            // Réactive la physique et la masse
+            body.mass = 1;
+            body.updateMassProperties();
+
+            // Synchronise les positions du moteur physique avec la 3D
+            const worldPos = new THREE.Vector3();
+            el.object3D.getWorldPosition(worldPos);
+            body.position.copy(worldPos);
+
+            // Applique la vélocité accumulée par le geste
+            body.velocity.set(this.velocity.x, this.velocity.y, this.velocity.z);
+          }
+
+          this.grabbedEl = null;
+        };
+
+        this.el.addEventListener('triggerdown', grabStart);
+        this.el.addEventListener('gripdown', grabStart);
+        this.el.addEventListener('triggerup', grabEnd);
+        this.el.addEventListener('gripup', grabEnd);
+      },
+
+      tick: function (time, delta) {
+        if (delta === 0) return;
+        const dt = Math.min(delta, 100) / 1000;
+
+        // Mesure la vitesse globale du contrôleur dans la scène
+        this.el.object3D.getWorldPosition(this.currPos);
+        this.velocity.subVectors(this.currPos, this.prevPos).divideScalar(dt);
+        this.prevPos.copy(this.currPos);
       }
     });
   </script>
 </head>
 <body>
-  <a-scene renderer="shadows: enabled" background="color: #87ceeb">
+  <!-- Activation du moteur Cannon.js (debug: false masque les maillages de collision) -->
+  <a-scene physics="debug: false; gravity: -9.8" renderer="shadows: enabled" background="color: #87ceeb">
 
-    <!-- Éclairage ambiant -->
     <a-entity light="type: ambient; color: #ffffff; intensity: 0.6"></a-entity>
-
-    <!-- Éclairage directionnel produisant des ombres -->
     <a-entity
       light="type: directional; color: #ffffff; intensity: 1.2; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048"
-      position="-3 6 4"
-      rotation="-45 -30 0">
+      position="-3 6 4">
     </a-entity>
 
-    <!-- Sol recevant les ombres -->
+    <!-- Sol statique (ne bouge pas, bloque les chutes) -->
     <a-plane
+      static-body
       position="0 0 0"
       rotation="-90 0 0"
-      width="20"
-      height="20"
+      width="30"
+      height="30"
       color="#6b8e23"
       shadow="receive: true">
     </a-plane>
 
-    <!-- Cube interactif (saisissable + soumis à la gravité) -->
+    <!-- Objets dynamiques (collisions mutuelles, gravité, empilables) -->
     <a-box
       class="grabbable"
-      grabbable-physics
-      position="-1 1.5 -2"
-      rotation="0 30 0"
-      width="1"
-      height="1"
-      depth="1"
+      dynamic-body="mass: 1; shape: box"
+      position="-0.8 2 -3"
+      rotation="0 15 0"
+      width="0.8" height="0.8" depth="0.8"
       color="#e74c3c"
       shadow="cast: true; receive: true">
     </a-box>
 
-    <!-- Sphère interactive (saisissable + soumise à la gravité) -->
+    <a-box
+      class="grabbable"
+      dynamic-body="mass: 1; shape: box"
+      position="-0.8 0.5 -3"
+      rotation="0 15 0"
+      width="0.8" height="0.8" depth="0.8"
+      color="#f39c12"
+      shadow="cast: true; receive: true">
+    </a-box>
+
     <a-sphere
       class="grabbable"
-      grabbable-physics
-      position="1 1.5 -2"
+      dynamic-body="mass: 1; shape: sphere"
+      position="1 2 -3"
       radius="0.5"
       color="#3498db"
       shadow="cast: true; receive: true">
     </a-sphere>
 
     <!-- Rig du joueur -->
-    <a-entity id="player" vr-player position="0 0 2">
+    <a-entity id="player" vr-player position="0 0 3">
       <a-camera position="0 1.6 0"></a-camera>
 
-      <!-- Main gauche : Déplacement + Grab -->
       <a-entity
         id="left-controller"
-        hand-grabber
+        physics-thrower
         oculus-touch-controls="hand: left"
         laser-controls="hand: left"
-        raycaster="objects: .grabbable; far: 5">
+        raycaster="objects: .grabbable; far: 4">
       </a-entity>
 
-      <!-- Main droite : Orientation + Grab -->
       <a-entity
         id="right-controller"
-        hand-grabber
+        physics-thrower
         oculus-touch-controls="hand: right"
         laser-controls="hand: right"
-        raycaster="objects: .grabbable; far: 5">
+        raycaster="objects: .grabbable; far: 4">
       </a-entity>
     </a-entity>
 
