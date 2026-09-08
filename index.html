@@ -17,28 +17,50 @@
         this.turnAxis = 0;
 
         this.onMove = (event) => {
-          this.moveAxis = event.detail.axis || [0, 0];
+          // x: axe horizontal (-1 gauche, +1 droite), y: axe vertical (-1 haut/avant, +1 bas/arrière)
+          this.moveAxis = [event.detail.x || 0, event.detail.y || 0];
         };
+
         this.onTurn = (event) => {
-          this.turnAxis = (event.detail.axis || [0, 0])[0];
+          // On ne prend que l'axe horizontal pour tourner la vue
+          this.turnAxis = event.detail.x || 0;
         };
 
         this.leftController = this.el.querySelector('#left-controller');
         this.rightController = this.el.querySelector('#right-controller');
+        this.camera = this.el.querySelector('a-camera');
+
         this.leftController.addEventListener('thumbstickmoved', this.onMove);
         this.rightController.addEventListener('thumbstickmoved', this.onTurn);
       },
 
       tick: function (time, delta) {
         const elapsed = Math.min(delta, 100) / 1000;
+
+        // 1. Rotation de la vue avec le joystick droit
+        if (Math.abs(this.turnAxis) > 0.1) {
+          this.el.object3D.rotation.y -= this.turnAxis * this.data.turnSpeed * elapsed;
+        }
+
+        // 2. Déplacement avec le joystick gauche
         const moveX = this.moveAxis[0];
         const moveZ = this.moveAxis[1];
-        const yaw = THREE.MathUtils.degToRad(this.el.object3D.rotation.y);
-        const distance = this.data.speed * elapsed;
 
-        this.el.object3D.position.x += (moveX * Math.cos(yaw) - moveZ * Math.sin(yaw)) * distance;
-        this.el.object3D.position.z += (moveX * Math.sin(yaw) + moveZ * Math.cos(yaw)) * distance;
-        this.el.object3D.rotation.y -= this.turnAxis * this.data.turnSpeed * elapsed;
+        if (Math.abs(moveX) > 0.1 || Math.abs(moveZ) > 0.1) {
+          // On prend la direction vers laquelle regarde le casque (la caméra)
+          let camYaw = 0;
+          if (this.camera) {
+            camYaw = this.camera.object3D.rotation.y;
+          }
+          // On ajoute la rotation générale du rig
+          const totalYaw = this.el.object3D.rotation.y + camYaw;
+
+          const distance = this.data.speed * elapsed;
+
+          // En VR, moveZ négatif = poussé vers l'avant
+          this.el.object3D.position.x += (moveX * Math.cos(totalYaw) + moveZ * Math.sin(totalYaw)) * distance;
+          this.el.object3D.position.z += (-moveX * Math.sin(totalYaw) + moveZ * Math.cos(totalYaw)) * distance;
+        }
       },
 
       remove: function () {
@@ -88,24 +110,22 @@
       shadow="cast: true; receive: true">
     </a-sphere>
 
-    <!-- Rig du joueur : les contrôleurs et la caméra se déplacent ensemble -->
-    <a-entity id="player" vr-player position="0 0 7">
-      <a-camera position="0 1.6 0" rotation="-15 0 0"></a-camera>
+    <!-- Rig du joueur -->
+    <a-entity id="player" vr-player position="0 0 5">
+      <a-camera position="0 1.6 0"></a-camera>
 
-      <!-- Stick gauche : déplacement avant/arrière et gauche/droite -->
+      <!-- Contrôleur gauche : Déplacement -->
       <a-entity
         id="left-controller"
-        laser-controls="hand: left"
-        raycaster="objects: .interactive"
-        position="-0.2 1.2 -0.4">
+        oculus-touch-controls="hand: left"
+        laser-controls="hand: left">
       </a-entity>
 
-      <!-- Stick droit : rotation de la vue -->
+      <!-- Contrôleur droit : Rotation -->
       <a-entity
         id="right-controller"
-        laser-controls="hand: right"
-        raycaster="objects: .interactive"
-        position="0.2 1.2 -0.4">
+        oculus-touch-controls="hand: right"
+        laser-controls="hand: right">
       </a-entity>
     </a-entity>
   </a-scene>
