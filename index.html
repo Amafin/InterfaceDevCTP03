@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scène A-Frame - Physique & Collisions complètes</title>
+  <title>Scène A-Frame - Arme physique & Tir VR</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-  <!-- Cannon.js pour A-Frame -->
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
   <script>
@@ -64,35 +63,86 @@
     });
 
     // -------------------------------------------------------------
-    // Gestion du Grab cinématique & Lancer réaliste
+    // Composant de tir de l'arme
+    // -------------------------------------------------------------
+    AFRAME.registerComponent('gun', {
+      schema: {
+        bulletSpeed: { type: 'number', default: 35 } // Vitesse initiale du projectile
+      },
+
+      shoot: function () {
+        const scene = this.el.sceneEl;
+        const muzzle = this.el.querySelector('#muzzle');
+
+        // Position de départ au bout du canon
+        const spawnPos = new THREE.Vector3();
+        if (muzzle) {
+          muzzle.object3D.getWorldPosition(spawnPos);
+        } else {
+          this.el.object3D.getWorldPosition(spawnPos);
+        }
+
+        // Direction du tir (axe -Z local de l'arme)
+        const forward = new THREE.Vector3(0, 0, -1);
+        const worldQuat = new THREE.Quaternion();
+        this.el.object3D.getWorldQuaternion(worldQuat);
+        forward.applyQuaternion(worldQuat).normalize();
+
+        // Création du projectile
+        const bullet = document.createElement('a-sphere');
+        bullet.setAttribute('radius', '0.04');
+        bullet.setAttribute('color', '#ffd700');
+        bullet.setAttribute('position', `${spawnPos.x} ${spawnPos.y} ${spawnPos.z}`);
+        bullet.setAttribute('dynamic-body', 'mass: 0.1; shape: sphere');
+        bullet.setAttribute('shadow', 'cast: true');
+
+        // Ajout à la scène
+        scene.appendChild(bullet);
+
+        // Impulsion physique dès que le corps Cannon.js est prêt
+        bullet.addEventListener('body-loaded', () => {
+          const impulse = new CANNON.Vec3(
+            forward.x * this.data.bulletSpeed,
+            forward.y * this.data.bulletSpeed,
+            forward.z * this.data.bulletSpeed
+          );
+          bullet.body.applyImpulse(impulse, bullet.body.position);
+        });
+
+        // Destruction après 3 secondes pour préserver les perfs
+        setTimeout(() => {
+          if (bullet.parentNode) {
+            bullet.parentNode.removeChild(bullet);
+          }
+        }, 3000);
+      }
+    });
+
+    // -------------------------------------------------------------
+    // Grab au bouton Grip + Tir à la Gâchette (Trigger)
     // -------------------------------------------------------------
     AFRAME.registerComponent('physics-grabber', {
       schema: {
-        throwMultiplier: { type: 'number', default: 1.4 } // Facteur d'élan au lancer
+        throwMultiplier: { type: 'number', default: 1.4 }
       },
 
       init: function () {
         this.grabbedEl = null;
         this.targetEl = null;
 
-        // Suivi de trajectoire pour calculer la vitesse réelle du lancer
         this.positions = [];
         this.handWorldPos = new THREE.Vector3();
         this.handWorldQuat = new THREE.Quaternion();
 
-        // Offset conservé entre la main et l'objet au moment du grab
-        // (garde la distance et l'orientation relative d'origine)
         this.grabOffsetPos = new THREE.Vector3();
         this.grabOffsetQuat = new THREE.Quaternion();
-
-        // Buffers réutilisables pour le calcul du grab
         this._tmpObjPos = new THREE.Vector3();
         this._tmpObjQuat = new THREE.Quaternion();
         this._tmpInvHandQuat = new THREE.Quaternion();
         this._tmpTargetPos = new THREE.Vector3();
         this._tmpTargetQuat = new THREE.Quaternion();
 
-        // Détection laser (limité à 1.5 mètre)
+        // Détection laser (1.5 mètre)
         this.el.addEventListener('raycaster-intersection', (e) => {
           const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
           if (valid.length > 0) this.targetEl = valid[0];
@@ -102,44 +152,35 @@
           this.targetEl = null;
         });
 
-        // Début de la saisie
+        // 1. Bouton GRIP : Saisir et lâcher
         const onGrab = () => {
           if (!this.targetEl || this.grabbedEl) return;
           this.grabbedEl = this.targetEl;
           this.positions = [];
 
-          // Position/orientation actuelles de la main
           this.el.object3D.getWorldPosition(this.handWorldPos);
           this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
-          // Position/orientation actuelles de l'objet ciblé
           this.grabbedEl.object3D.getWorldPosition(this._tmpObjPos);
           this.grabbedEl.object3D.getWorldQuaternion(this._tmpObjQuat);
 
-          // Quaternion inverse de la main (conjugate = inverse pour un quaternion unitaire)
           this._tmpInvHandQuat.copy(this.handWorldQuat).conjugate();
 
-          // Offset de position exprimé dans le repère local de la main
-          // => conserve la distance/l'angle par rapport à la main au moment du grab
           this.grabOffsetPos
             .copy(this._tmpObjPos)
             .sub(this.handWorldPos)
             .applyQuaternion(this._tmpInvHandQuat);
 
-          // Offset de rotation : objQuat = handQuat * offsetQuat
-          // => offsetQuat = invHandQuat * objQuat
           this.grabOffsetQuat
             .copy(this._tmpInvHandQuat)
             .multiply(this._tmpObjQuat);
         };
 
-        // Fin de la saisie / Lancer
         const onRelease = () => {
           if (!this.grabbedEl) return;
           const body = this.grabbedEl.body;
 
           if (body && this.positions.length >= 2) {
-            // Moyenne de la vélocité sur les dernières frames enregistrées
             const oldest = this.positions[0];
             const newest = this.positions[this.positions.length - 1];
             const totalDt = (newest.time - oldest.time) / 1000;
@@ -157,18 +198,22 @@
           this.positions = [];
         };
 
-        this.el.addEventListener('triggerdown', onGrab);
+        // 2. Bouton TRIGGER : Tirer si l'objet tenu est une arme
+        const onTriggerDown = () => {
+          if (this.grabbedEl && this.grabbedEl.components['gun']) {
+            this.grabbedEl.components['gun'].shoot();
+          }
+        };
+
         this.el.addEventListener('gripdown', onGrab);
-        this.el.addEventListener('triggerup', onRelease);
         this.el.addEventListener('gripup', onRelease);
+        this.el.addEventListener('triggerdown', onTriggerDown);
       },
 
       tick: function (time, delta) {
-        // Acquisition de la position globale de la manette
         this.el.object3D.getWorldPosition(this.handWorldPos);
         this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
-        // Historique glissant pour le calcul de vélocité
         this.positions.push({
           pos: this.handWorldPos.clone(),
           time: performance.now()
@@ -177,26 +222,21 @@
           this.positions.shift();
         }
 
-        // Déplacement du corps physique en conservant l'offset de distance/orientation
         if (this.grabbedEl && this.grabbedEl.body) {
           const body = this.grabbedEl.body;
 
-          // Position cible = position de la main + offset (tourné avec la main)
           this._tmpTargetPos
             .copy(this.grabOffsetPos)
             .applyQuaternion(this.handWorldQuat)
             .add(this.handWorldPos);
 
-          // Rotation cible = rotation de la main * offset de rotation d'origine
           this._tmpTargetQuat
             .copy(this.handWorldQuat)
             .multiply(this.grabOffsetQuat);
 
-          // Déplace le corps Cannon.js : les collisions restent actives en direct
           body.position.set(this._tmpTargetPos.x, this._tmpTargetPos.y, this._tmpTargetPos.z);
           body.quaternion.set(this._tmpTargetQuat.x, this._tmpTargetQuat.y, this._tmpTargetQuat.z, this._tmpTargetQuat.w);
 
-          // Réinitialise la vélocité résiduelle pendant la prise
           body.velocity.set(0, 0, 0);
           body.angularVelocity.set(0, 0, 0);
         }
@@ -224,12 +264,11 @@
       shadow="receive: true">
     </a-plane>
 
-    <!-- Objets interactifs -->
+    <!-- Cibles interactives -->
     <a-box
       class="grabbable"
-      dynamic-body="mass: 2; shape: box"
-      position="-0.6 1.5 -1.2"
-      rotation="0 15 0"
+      dynamic-body="mass: 1; shape: box"
+      position="-0.5 1.5 -2.5"
       width="0.5" height="0.5" depth="0.5"
       color="#e74c3c"
       shadow="cast: true; receive: true">
@@ -237,28 +276,37 @@
 
     <a-box
       class="grabbable"
-      dynamic-body="mass: 2; shape: box"
-      position="-0.6 0.5 -1.2"
-      rotation="0 15 0"
+      dynamic-body="mass: 1; shape: box"
+      position="0.5 1.5 -2.5"
       width="0.5" height="0.5" depth="0.5"
       color="#f39c12"
       shadow="cast: true; receive: true">
     </a-box>
 
-    <a-sphere
+    <!-- ======================================================== -->
+    <!-- Arme à feu (modèle composite physique avec canon et sortie) -->
+    <!-- ======================================================== -->
+    <a-entity
+      id="pistol"
       class="grabbable"
-      dynamic-body="mass: 2; shape: sphere"
-      position="0.6 1.2 -1.2"
-      radius="0.3"
-      color="#3498db"
-      shadow="cast: true; receive: true">
-    </a-sphere>
+      gun="bulletSpeed: 40"
+      dynamic-body="mass: 1.5; shape: box"
+      position="0 1.2 -0.8"
+      rotation="0 90 0"
+      shadow="cast: true">
+
+      <!-- Culasse / Canon principal -->
+      <a-box width="0.08" height="0.08" depth="0.3" position="0 0.05 0" color="#2c3e50"></a-box>
+      <!-- Poignée -->
+      <a-box width="0.06" height="0.14" depth="0.07" position="0 -0.04 0.08" rotation="18 0 0" color="#7f8c8d"></a-box>
+      <!-- Point de sortie de la balle (vers l'avant -Z) -->
+      <a-entity id="muzzle" position="0 0.05 -0.18"></a-entity>
+    </a-entity>
 
     <!-- Rig du joueur -->
-    <a-entity id="player" vr-player position="0 0 1.2">
+    <a-entity id="player" vr-player position="0 0 0.5">
       <a-camera position="0 1.6 0"></a-camera>
 
-      <!-- Portée du laser réduite à 1.5 m (far: 1.5) -->
       <a-entity
         id="left-controller"
         physics-grabber
