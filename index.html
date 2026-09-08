@@ -168,7 +168,7 @@
             this.grabOffsetPos.set(0, -0.04, -0.08);
             this.grabOffsetQuat.setFromAxisAngle(
               new THREE.Vector3(1, 0, 0),
-              THREE.MathUtils.degToRad(-25)
+              THREE.MathUtils.degToRad(-25))
           } else {
             // OBJETS CLASSIQUES : Conserve la distance et l'angle d'origine
             this.grabbedEl.object3D.getWorldPosition(this._tmpObjPos);
