@@ -9,21 +9,24 @@
     AFRAME.registerComponent('vr-player', {
       schema: {
         speed: {type: 'number', default: 3},
-        turnSpeed: {type: 'number', default: 2}
+        turnSpeed: {type: 'number', default: 2},
+        elevateSpeed: {type: 'number', default: 2}
       },
 
       init: function () {
         this.moveAxis = [0, 0];
         this.turnAxis = 0;
+        this.elevateAxis = 0;
 
+        // Joystick gauche : Déplacement horizontal (avant/arrière, gauche/droite)
         this.onMove = (event) => {
-          // x: axe horizontal (-1 gauche, +1 droite), y: axe vertical (-1 haut/avant, +1 bas/arrière)
           this.moveAxis = [event.detail.x || 0, event.detail.y || 0];
         };
 
-        this.onTurn = (event) => {
-          // On ne prend que l'axe horizontal pour tourner la vue
+        // Joystick droit : Rotation (x) et Élévation (y)
+        this.onRightStick = (event) => {
           this.turnAxis = event.detail.x || 0;
+          this.elevateAxis = event.detail.y || 0;
         };
 
         this.leftController = this.el.querySelector('#left-controller');
@@ -31,33 +34,35 @@
         this.camera = this.el.querySelector('a-camera');
 
         this.leftController.addEventListener('thumbstickmoved', this.onMove);
-        this.rightController.addEventListener('thumbstickmoved', this.onTurn);
+        this.rightController.addEventListener('thumbstickmoved', this.onRightStick);
       },
 
       tick: function (time, delta) {
         const elapsed = Math.min(delta, 100) / 1000;
 
-        // 1. Rotation de la vue avec le joystick droit
+        // 1. Rotation de la vue (joystick droit - axe X)
         if (Math.abs(this.turnAxis) > 0.1) {
           this.el.object3D.rotation.y -= this.turnAxis * this.data.turnSpeed * elapsed;
         }
 
-        // 2. Déplacement avec le joystick gauche
+        // 2. Monter / Descendre (joystick droit - axe Y)
+        // En poussant vers le haut (y < -0.1) on monte, en tirant vers le bas (y > 0.1) on descend
+        if (Math.abs(this.elevateAxis) > 0.1) {
+          this.el.object3D.position.y -= this.elevateAxis * this.data.elevateSpeed * elapsed;
+        }
+
+        // 3. Déplacement horizontal (joystick gauche)
         const moveX = this.moveAxis[0];
         const moveZ = this.moveAxis[1];
 
         if (Math.abs(moveX) > 0.1 || Math.abs(moveZ) > 0.1) {
-          // On prend la direction vers laquelle regarde le casque (la caméra)
           let camYaw = 0;
           if (this.camera) {
             camYaw = this.camera.object3D.rotation.y;
           }
-          // On ajoute la rotation générale du rig
           const totalYaw = this.el.object3D.rotation.y + camYaw;
-
           const distance = this.data.speed * elapsed;
 
-          // En VR, moveZ négatif = poussé vers l'avant
           this.el.object3D.position.x += (moveX * Math.cos(totalYaw) + moveZ * Math.sin(totalYaw)) * distance;
           this.el.object3D.position.z += (-moveX * Math.sin(totalYaw) + moveZ * Math.cos(totalYaw)) * distance;
         }
@@ -65,7 +70,7 @@
 
       remove: function () {
         this.leftController.removeEventListener('thumbstickmoved', this.onMove);
-        this.rightController.removeEventListener('thumbstickmoved', this.onTurn);
+        this.rightController.removeEventListener('thumbstickmoved', this.onRightStick);
       }
     });
   </script>
@@ -114,14 +119,14 @@
     <a-entity id="player" vr-player position="0 0 5">
       <a-camera position="0 1.6 0"></a-camera>
 
-      <!-- Contrôleur gauche : Déplacement -->
+      <!-- Contrôleur gauche : Déplacement avant/arrière/gauche/droite -->
       <a-entity
         id="left-controller"
         oculus-touch-controls="hand: left"
         laser-controls="hand: left">
       </a-entity>
 
-      <!-- Contrôleur droit : Rotation -->
+      <!-- Contrôleur droit : Rotation gauche/droite + Montée/Descente -->
       <a-entity
         id="right-controller"
         oculus-touch-controls="hand: right"
