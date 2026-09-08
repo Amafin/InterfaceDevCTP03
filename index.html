@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scène A-Frame - Arme physique & Tir VR</title>
+  <title>Scène A-Frame - Physique, Objets & Arme VR</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
@@ -63,18 +63,17 @@
     });
 
     // -------------------------------------------------------------
-    // Composant de tir de l'arme
+    // Composant arme : tir du projectile
     // -------------------------------------------------------------
     AFRAME.registerComponent('gun', {
       schema: {
-        bulletSpeed: { type: 'number', default: 35 } // Vitesse initiale du projectile
+        bulletSpeed: { type: 'number', default: 35 }
       },
 
       shoot: function () {
         const scene = this.el.sceneEl;
         const muzzle = this.el.querySelector('#muzzle');
 
-        // Position de départ au bout du canon
         const spawnPos = new THREE.Vector3();
         if (muzzle) {
           muzzle.object3D.getWorldPosition(spawnPos);
@@ -82,24 +81,22 @@
           this.el.object3D.getWorldPosition(spawnPos);
         }
 
-        // Direction du tir (axe -Z local de l'arme)
+        // Direction avant de l'arme (-Z)
         const forward = new THREE.Vector3(0, 0, -1);
         const worldQuat = new THREE.Quaternion();
         this.el.object3D.getWorldQuaternion(worldQuat);
         forward.applyQuaternion(worldQuat).normalize();
 
-        // Création du projectile
+        // Création de la balle
         const bullet = document.createElement('a-sphere');
-        bullet.setAttribute('radius', '0.04');
-        bullet.setAttribute('color', '#ffd700');
+        bullet.setAttribute('radius', '0.05');
+        bullet.setAttribute('color', '#f1c40f');
         bullet.setAttribute('position', `${spawnPos.x} ${spawnPos.y} ${spawnPos.z}`);
-        bullet.setAttribute('dynamic-body', 'mass: 0.1; shape: sphere');
+        bullet.setAttribute('dynamic-body', 'mass: 0.2; shape: sphere');
         bullet.setAttribute('shadow', 'cast: true');
 
-        // Ajout à la scène
         scene.appendChild(bullet);
 
-        // Impulsion physique dès que le corps Cannon.js est prêt
         bullet.addEventListener('body-loaded', () => {
           const impulse = new CANNON.Vec3(
             forward.x * this.data.bulletSpeed,
@@ -109,17 +106,15 @@
           bullet.body.applyImpulse(impulse, bullet.body.position);
         });
 
-        // Destruction après 3 secondes pour préserver les perfs
+        // Nettoyage après 3 secondes
         setTimeout(() => {
-          if (bullet.parentNode) {
-            bullet.parentNode.removeChild(bullet);
-          }
+          if (bullet.parentNode) bullet.parentNode.removeChild(bullet);
         }, 3000);
       }
     });
 
     // -------------------------------------------------------------
-    // Grab au bouton Grip + Tir à la Gâchette (Trigger)
+    // Grab au Grip & Tir au Trigger
     // -------------------------------------------------------------
     AFRAME.registerComponent('physics-grabber', {
       schema: {
@@ -136,13 +131,14 @@
 
         this.grabOffsetPos = new THREE.Vector3();
         this.grabOffsetQuat = new THREE.Quaternion();
+
         this._tmpObjPos = new THREE.Vector3();
         this._tmpObjQuat = new THREE.Quaternion();
         this._tmpInvHandQuat = new THREE.Quaternion();
         this._tmpTargetPos = new THREE.Vector3();
         this._tmpTargetQuat = new THREE.Quaternion();
 
-        // Détection laser (1.5 mètre)
+        // Raycaster intersection
         this.el.addEventListener('raycaster-intersection', (e) => {
           const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
           if (valid.length > 0) this.targetEl = valid[0];
@@ -152,7 +148,7 @@
           this.targetEl = null;
         });
 
-        // 1. Bouton GRIP : Saisir et lâcher
+        // Grab / Release via GRIP (ou gâchette si ce n'est pas une arme)
         const onGrab = () => {
           if (!this.targetEl || this.grabbedEl) return;
           this.grabbedEl = this.targetEl;
@@ -198,16 +194,26 @@
           this.positions = [];
         };
 
-        // 2. Bouton TRIGGER : Tirer si l'objet tenu est une arme
+        // Tir au Trigger
         const onTriggerDown = () => {
           if (this.grabbedEl && this.grabbedEl.components['gun']) {
             this.grabbedEl.components['gun'].shoot();
+          } else if (!this.grabbedEl) {
+            // Si on ne tient rien, trigger peut aussi servir à attraper
+            onGrab();
+          }
+        };
+
+        const onTriggerUp = () => {
+          if (this.grabbedEl && !this.grabbedEl.components['gun']) {
+            onRelease();
           }
         };
 
         this.el.addEventListener('gripdown', onGrab);
         this.el.addEventListener('gripup', onRelease);
         this.el.addEventListener('triggerdown', onTriggerDown);
+        this.el.addEventListener('triggerup', onTriggerUp);
       },
 
       tick: function (time, delta) {
@@ -264,11 +270,12 @@
       shadow="receive: true">
     </a-plane>
 
-    <!-- Cibles interactives -->
+    <!-- TES OBJETS D'ORIGINE -->
     <a-box
       class="grabbable"
-      dynamic-body="mass: 1; shape: box"
-      position="-0.5 1.5 -2.5"
+      dynamic-body="mass: 2; shape: box"
+      position="-0.6 1.5 -1.2"
+      rotation="0 15 0"
       width="0.5" height="0.5" depth="0.5"
       color="#e74c3c"
       shadow="cast: true; receive: true">
@@ -276,35 +283,48 @@
 
     <a-box
       class="grabbable"
-      dynamic-body="mass: 1; shape: box"
-      position="0.5 1.5 -2.5"
+      dynamic-body="mass: 2; shape: box"
+      position="-0.6 0.5 -1.2"
+      rotation="0 15 0"
       width="0.5" height="0.5" depth="0.5"
       color="#f39c12"
       shadow="cast: true; receive: true">
     </a-box>
 
-    <!-- ======================================================== -->
-    <!-- Arme à feu (modèle composite physique avec canon et sortie) -->
-    <!-- ======================================================== -->
-    <a-entity
+    <a-sphere
+      class="grabbable"
+      dynamic-body="mass: 2; shape: sphere"
+      position="0.6 1.2 -1.2"
+      radius="0.3"
+      color="#3498db"
+      shadow="cast: true; receive: true">
+    </a-sphere>
+
+    <!-- ARME À FEU (Ciblage laser garanti et physique intégrée) -->
+    <a-box
       id="pistol"
       class="grabbable"
       gun="bulletSpeed: 40"
       dynamic-body="mass: 1.5; shape: box"
-      position="0 1.2 -0.8"
-      rotation="0 90 0"
-      shadow="cast: true">
+      position="0 1 -0.8"
+      width="0.08" height="0.08" depth="0.32"
+      color="#2c3e50"
+      shadow="cast: true; receive: true">
 
-      <!-- Culasse / Canon principal -->
-      <a-box width="0.08" height="0.08" depth="0.3" position="0 0.05 0" color="#2c3e50"></a-box>
-      <!-- Poignée -->
-      <a-box width="0.06" height="0.14" depth="0.07" position="0 -0.04 0.08" rotation="18 0 0" color="#7f8c8d"></a-box>
-      <!-- Point de sortie de la balle (vers l'avant -Z) -->
-      <a-entity id="muzzle" position="0 0.05 -0.18"></a-entity>
-    </a-entity>
+      <!-- Poignée sous le canon -->
+      <a-box
+        width="0.06" height="0.14" depth="0.07"
+        position="0 -0.09 0.08"
+        rotation="15 0 0"
+        color="#7f8c8d">
+      </a-box>
+
+      <!-- Sortie de canon pour les balles -->
+      <a-entity id="muzzle" position="0 0 -0.18"></a-entity>
+    </a-box>
 
     <!-- Rig du joueur -->
-    <a-entity id="player" vr-player position="0 0 0.5">
+    <a-entity id="player" vr-player position="0 0 1.2">
       <a-camera position="0 1.6 0"></a-camera>
 
       <a-entity
