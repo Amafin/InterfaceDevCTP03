@@ -80,6 +80,18 @@
         this.handWorldPos = new THREE.Vector3();
         this.handWorldQuat = new THREE.Quaternion();
 
+        // Offset conservé entre la main et l'objet au moment du grab
+        // (garde la distance et l'orientation relative d'origine)
+        this.grabOffsetPos = new THREE.Vector3();
+        this.grabOffsetQuat = new THREE.Quaternion();
+
+        // Buffers réutilisables pour le calcul du grab
+        this._tmpObjPos = new THREE.Vector3();
+        this._tmpObjQuat = new THREE.Quaternion();
+        this._tmpInvHandQuat = new THREE.Quaternion();
+        this._tmpTargetPos = new THREE.Vector3();
+        this._tmpTargetQuat = new THREE.Quaternion();
+
         // Détection laser (limité à 1.5 mètre)
         this.el.addEventListener('raycaster-intersection', (e) => {
           const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
@@ -95,6 +107,30 @@
           if (!this.targetEl || this.grabbedEl) return;
           this.grabbedEl = this.targetEl;
           this.positions = [];
+
+          // Position/orientation actuelles de la main
+          this.el.object3D.getWorldPosition(this.handWorldPos);
+          this.el.object3D.getWorldQuaternion(this.handWorldQuat);
+
+          // Position/orientation actuelles de l'objet ciblé
+          this.grabbedEl.object3D.getWorldPosition(this._tmpObjPos);
+          this.grabbedEl.object3D.getWorldQuaternion(this._tmpObjQuat);
+
+          // Quaternion inverse de la main (conjugate = inverse pour un quaternion unitaire)
+          this._tmpInvHandQuat.copy(this.handWorldQuat).conjugate();
+
+          // Offset de position exprimé dans le repère local de la main
+          // => conserve la distance/l'angle par rapport à la main au moment du grab
+          this.grabOffsetPos
+            .copy(this._tmpObjPos)
+            .sub(this.handWorldPos)
+            .applyQuaternion(this._tmpInvHandQuat);
+
+          // Offset de rotation : objQuat = handQuat * offsetQuat
+          // => offsetQuat = invHandQuat * objQuat
+          this.grabOffsetQuat
+            .copy(this._tmpInvHandQuat)
+            .multiply(this._tmpObjQuat);
         };
 
         // Fin de la saisie / Lancer
@@ -141,13 +177,24 @@
           this.positions.shift();
         }
 
-        // Déplacement du corps physique vers la main
+        // Déplacement du corps physique en conservant l'offset de distance/orientation
         if (this.grabbedEl && this.grabbedEl.body) {
           const body = this.grabbedEl.body;
 
+          // Position cible = position de la main + offset (tourné avec la main)
+          this._tmpTargetPos
+            .copy(this.grabOffsetPos)
+            .applyQuaternion(this.handWorldQuat)
+            .add(this.handWorldPos);
+
+          // Rotation cible = rotation de la main * offset de rotation d'origine
+          this._tmpTargetQuat
+            .copy(this.handWorldQuat)
+            .multiply(this.grabOffsetQuat);
+
           // Déplace le corps Cannon.js : les collisions restent actives en direct
-          body.position.set(this.handWorldPos.x, this.handWorldPos.y, this.handWorldPos.z);
-          body.quaternion.set(this.handWorldQuat.x, this.handWorldQuat.y, this.handWorldQuat.z, this.handWorldQuat.w);
+          body.position.set(this._tmpTargetPos.x, this._tmpTargetPos.y, this._tmpTargetPos.z);
+          body.quaternion.set(this._tmpTargetQuat.x, this._tmpTargetQuat.y, this._tmpTargetQuat.z, this._tmpTargetQuat.w);
 
           // Réinitialise la vélocité résiduelle pendant la prise
           body.velocity.set(0, 0, 0);
