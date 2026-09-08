@@ -7,104 +7,104 @@
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
   <script>
-AFRAME.registerComponent('physics-grabber', {
-  schema: {
-    throwMultiplier: { type: 'number', default: 1.4 }
-  },
+    AFRAME.registerComponent('physics-grabber', {
+      schema: {
+        throwMultiplier: { type: 'number', default: 1.4 }
+      },
 
-  init: function () {
-    this.grabbedEl = null;
-    this.targetEl = null;
+      init: function () {
+        this.grabbedEl = null;
+        this.targetEl = null;
 
-    this.positions = [];
-    this.handWorldPos = new THREE.Vector3();
-    this.handWorldQuat = new THREE.Quaternion();
+        this.positions = [];
+        this.handWorldPos = new THREE.Vector3();
+        this.handWorldQuat = new THREE.Quaternion();
 
-    this.holdOffsetPos = new THREE.Vector3();
-    this.holdOffsetQuat = new THREE.Quaternion();
-    this.targetWorldPos = new THREE.Vector3();
-    this.targetWorldQuat = new THREE.Quaternion();
+        this.holdOffsetPos = new THREE.Vector3();
+        this.holdOffsetQuat = new THREE.Quaternion();
+        this.targetWorldPos = new THREE.Vector3();
+        this.targetWorldQuat = new THREE.Quaternion();
 
-    this.el.addEventListener('raycaster-intersection', (e) => {
-      const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
-      if (valid.length > 0) this.targetEl = valid[0];
-    });
+        this.el.addEventListener('raycaster-intersection', (e) => {
+          const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
+          if (valid.length > 0) this.targetEl = valid[0];
+        });
 
-    this.el.addEventListener('raycaster-intersection-cleared', () => {
-      this.targetEl = null;
-    });
+        this.el.addEventListener('raycaster-intersection-cleared', () => {
+          this.targetEl = null;
+        });
 
-    const onGrab = () => {
-      if (!this.targetEl || this.grabbedEl) return;
-      this.grabbedEl = this.targetEl;
-      this.positions = [];
+        const onGrab = () => {
+          if (!this.targetEl || this.grabbedEl) return;
+          this.grabbedEl = this.targetEl;
+          this.positions = [];
 
-      this.el.object3D.getWorldPosition(this.handWorldPos);
-      this.el.object3D.getWorldQuaternion(this.handWorldQuat);
+          this.el.object3D.getWorldPosition(this.handWorldPos);
+          this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
-      this.grabbedEl.object3D.getWorldPosition(this.targetWorldPos);
-      this.grabbedEl.object3D.getWorldQuaternion(this.targetWorldQuat);
+          this.grabbedEl.object3D.getWorldPosition(this.targetWorldPos);
+          this.grabbedEl.object3D.getWorldQuaternion(this.targetWorldQuat);
 
-      const invHandQuat = this.handWorldQuat.clone().invert();
-      this.holdOffsetPos.subVectors(this.targetWorldPos, this.handWorldPos).applyQuaternion(invHandQuat);
-      this.holdOffsetQuat.copy(invHandQuat).multiply(this.targetWorldQuat);
-    };
+          const invHandQuat = this.handWorldQuat.clone().invert();
+          this.holdOffsetPos.subVectors(this.targetWorldPos, this.handWorldPos).applyQuaternion(invHandQuat);
+          this.holdOffsetQuat.copy(invHandQuat).multiply(this.targetWorldQuat);
+        };
 
-    const onRelease = () => {
-      if (!this.grabbedEl) return;
-      const body = this.grabbedEl.body;
+        const onRelease = () => {
+          if (!this.grabbedEl) return;
+          const body = this.grabbedEl.body;
 
-      if (body && this.positions.length >= 2) {
-        const oldest = this.positions[0];
-        const newest = this.positions[this.positions.length - 1];
-        const totalDt = (newest.time - oldest.time) / 1000;
+          if (body && this.positions.length >= 2) {
+            const oldest = this.positions[0];
+            const newest = this.positions[this.positions.length - 1];
+            const totalDt = (newest.time - oldest.time) / 1000;
 
-        if (totalDt > 0.01) {
-          const vx = ((newest.pos.x - oldest.pos.x) / totalDt) * this.data.throwMultiplier;
-          const vy = ((newest.pos.y - oldest.pos.y) / totalDt) * this.data.throwMultiplier;
-          const vz = ((newest.pos.z - oldest.pos.z) / totalDt) * this.data.throwMultiplier;
+            if (totalDt > 0.01) {
+              const vx = ((newest.pos.x - oldest.pos.x) / totalDt) * this.data.throwMultiplier;
+              const vy = ((newest.pos.y - oldest.pos.y) / totalDt) * this.data.throwMultiplier;
+              const vz = ((newest.pos.z - oldest.pos.z) / totalDt) * this.data.throwMultiplier;
 
-          body.velocity.set(vx, vy, vz);
+              body.velocity.set(vx, vy, vz);
+            }
+          }
+
+          this.grabbedEl = null;
+          this.positions = [];
+        };
+
+        this.el.addEventListener('triggerdown', onGrab);
+        this.el.addEventListener('gripdown', onGrab);
+        this.el.addEventListener('triggerup', onRelease);
+        this.el.addEventListener('gripup', onRelease);
+      },
+
+      tick: function (time, delta) {
+        this.el.object3D.getWorldPosition(this.handWorldPos);
+        this.el.object3D.getWorldQuaternion(this.handWorldQuat);
+
+        this.positions.push({
+          pos: this.handWorldPos.clone(),
+          time: performance.now()
+        });
+        if (this.positions.length > 6) {
+          this.positions.shift();
+        }
+
+        if (this.grabbedEl && this.grabbedEl.body) {
+          const body = this.grabbedEl.body;
+          const currentOffset = this.holdOffsetPos.clone().applyQuaternion(this.handWorldQuat);
+          const newPos = this.handWorldPos.clone().add(currentOffset);
+
+          body.position.set(newPos.x, newPos.y, newPos.z);
+
+          const newQuat = this.handWorldQuat.clone().multiply(this.holdOffsetQuat);
+          body.quaternion.set(newQuat.x, newQuat.y, newQuat.z, newQuat.w);
+
+          body.velocity.set(0, 0, 0);
+          body.angularVelocity.set(0, 0, 0);
         }
       }
-
-      this.grabbedEl = null;
-      this.positions = [];
-    };
-
-    this.el.addEventListener('triggerdown', onGrab);
-    this.el.addEventListener('gripdown', onGrab);
-    this.el.addEventListener('triggerup', onRelease);
-    this.el.addEventListener('gripup', onRelease);
-  },
-
-  tick: function (time, delta) {
-    this.el.object3D.getWorldPosition(this.handWorldPos);
-    this.el.object3D.getWorldQuaternion(this.handWorldQuat);
-
-    this.positions.push({
-      pos: this.handWorldPos.clone(),
-      time: performance.now()
     });
-    if (this.positions.length > 6) {
-      this.positions.shift();
-    }
-
-    if (this.grabbedEl && this.grabbedEl.body) {
-      const body = this.grabbedEl.body;
-      const currentOffset = this.holdOffsetPos.clone().applyQuaternion(this.handWorldQuat);
-      const newPos = this.handWorldPos.clone().add(currentOffset);
-
-      body.position.set(newPos.x, newPos.y, newPos.z);
-
-      const newQuat = this.handWorldQuat.clone().multiply(this.holdOffsetQuat);
-      body.quaternion.set(newQuat.x, newQuat.y, newQuat.z, newQuat.w);
-
-      body.velocity.set(0, 0, 0);
-      body.angularVelocity.set(0, 0, 0);
-    }
-  }
-});
   </script>
 </head>
 <body>
