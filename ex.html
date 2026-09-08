@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scène A-Frame</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+</head>
+<body>
+  <a-scene renderer="shadows: enabled" background="color: #87ceeb">
+    <!-- Éclairage uniforme de la scène -->
+    <a-entity light="type: ambient; color: #ffffff; intensity: 0.6"></a-entity>
+
+    <!-- Lumière directionnelle produisant des ombres -->
+    <a-entity
+      light="type: directional; color: #ffffff; intensity: 1.2; castShadow: true; shadowMapWidth: 2048; shadowMapHeight: 2048"
+      position="-3 6 4"
+      rotation="-45 -30 0">
+    </a-entity>
+
+    <!-- Sol : reçoit les ombres -->
+    <a-plane
+      position="0 0 0"
+      rotation="-90 0 0"
+      width="20"
+      height="20"
+      color="#6b8e23"
+      shadow="receive: true">
+    </a-plane>
+
+    <!-- Objets : projettent et reçoivent les ombres -->
+    <a-box
+      position="-1 1 -3"
+      rotation="0 30 0"
+      width="2"
+      height="2"
+      depth="2"
+      color="#e74c3c"
+      shadow="cast: true; receive: true">
+    </a-box>
+
+    <a-sphere
+      position="2 1 -4"
+      radius="1"
+      color="#3498db"
+      shadow="cast: true; receive: true">
+    </a-sphere>
+
+    <a-camera position="0 3 7" rotation="-15 0 0"></a-camera>
+  </a-scene>
+</body>
+</html>
