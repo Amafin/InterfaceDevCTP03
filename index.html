@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scène A-Frame</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
   <script>
 AFRAME.registerComponent('physics-grabber', {
   schema: {
@@ -19,13 +20,11 @@ AFRAME.registerComponent('physics-grabber', {
     this.handWorldPos = new THREE.Vector3();
     this.handWorldQuat = new THREE.Quaternion();
 
-    // Vecteurs pour préserver le décalage relatif
     this.holdOffsetPos = new THREE.Vector3();
     this.holdOffsetQuat = new THREE.Quaternion();
     this.targetWorldPos = new THREE.Vector3();
     this.targetWorldQuat = new THREE.Quaternion();
 
-    // Détection laser (1.5 m)
     this.el.addEventListener('raycaster-intersection', (e) => {
       const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
       if (valid.length > 0) this.targetEl = valid[0];
@@ -35,27 +34,22 @@ AFRAME.registerComponent('physics-grabber', {
       this.targetEl = null;
     });
 
-    // Début de la saisie : calcul de l'écart initial (offset)
     const onGrab = () => {
       if (!this.targetEl || this.grabbedEl) return;
       this.grabbedEl = this.targetEl;
       this.positions = [];
 
-      // Positions et rotations mondiales actuelles
       this.el.object3D.getWorldPosition(this.handWorldPos);
       this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
       this.grabbedEl.object3D.getWorldPosition(this.targetWorldPos);
       this.grabbedEl.object3D.getWorldQuaternion(this.targetWorldQuat);
 
-      // Calcul du décalage relatif exprimé dans le repère local de la main
       const invHandQuat = this.handWorldQuat.clone().invert();
-
       this.holdOffsetPos.subVectors(this.targetWorldPos, this.handWorldPos).applyQuaternion(invHandQuat);
       this.holdOffsetQuat.copy(invHandQuat).multiply(this.targetWorldQuat);
     };
 
-    // Relâchement et lancer
     const onRelease = () => {
       if (!this.grabbedEl) return;
       const body = this.grabbedEl.body;
@@ -88,7 +82,6 @@ AFRAME.registerComponent('physics-grabber', {
     this.el.object3D.getWorldPosition(this.handWorldPos);
     this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
-    // Historique glissant pour le lancer
     this.positions.push({
       pos: this.handWorldPos.clone(),
       time: performance.now()
@@ -97,18 +90,13 @@ AFRAME.registerComponent('physics-grabber', {
       this.positions.shift();
     }
 
-    // Déplacement de l'objet avec conservation de l'offset
     if (this.grabbedEl && this.grabbedEl.body) {
       const body = this.grabbedEl.body;
-
-      // Applique la rotation de la main à l'offset initial
       const currentOffset = this.holdOffsetPos.clone().applyQuaternion(this.handWorldQuat);
       const newPos = this.handWorldPos.clone().add(currentOffset);
 
-      // Met à jour la position du corps Cannon.js
       body.position.set(newPos.x, newPos.y, newPos.z);
 
-      // Met à jour la rotation en combinant celle de la main et l'orientation initiale
       const newQuat = this.handWorldQuat.clone().multiply(this.holdOffsetQuat);
       body.quaternion.set(newQuat.x, newQuat.y, newQuat.z, newQuat.w);
 
@@ -120,8 +108,9 @@ AFRAME.registerComponent('physics-grabber', {
   </script>
 </head>
 <body>
-  <a-scene background="color: #87ceeb">
+  <a-scene physics="debug: false; gravity: -9.8" background="color: #87ceeb">
     <a-plane
+      static-body
       position="0 0 0"
       rotation="-90 0 0"
       width="20"
@@ -129,8 +118,33 @@ AFRAME.registerComponent('physics-grabber', {
       color="#6b8e23">
     </a-plane>
 
-    <a-box position="0 1 -3" width="2" height="2" depth="2" color="#e74c3c"></a-box>
-    <a-camera position="0 2 6"></a-camera>
+    <a-box
+      class="grabbable"
+      dynamic-body="mass: 2; shape: box"
+      position="0 1 -2"
+      width="0.8"
+      height="0.8"
+      depth="0.8"
+      color="#e74c3c">
+    </a-box>
+
+    <a-entity id="player" position="0 0 1">
+      <a-camera position="0 1.6 0"></a-camera>
+      <a-entity
+        id="left-controller"
+        physics-grabber
+        oculus-touch-controls="hand: left"
+        laser-controls="hand: left"
+        raycaster="objects: .grabbable; far: 1.5">
+      </a-entity>
+      <a-entity
+        id="right-controller"
+        physics-grabber
+        oculus-touch-controls="hand: right"
+        laser-controls="hand: right"
+        raycaster="objects: .grabbable; far: 1.5">
+      </a-entity>
+    </a-entity>
   </a-scene>
 </body>
 </html>
