@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scène A-Frame - Physique, Objets & Arme VR</title>
+  <title>Scène A-Frame - Arme en main & Tir tendu</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
   <script>
     // -------------------------------------------------------------
-    // Déplacement et vue aux sticks
+    // Déplacement et vue aux joysticks
     // -------------------------------------------------------------
     AFRAME.registerComponent('vr-player', {
       schema: {
@@ -63,11 +63,11 @@
     });
 
     // -------------------------------------------------------------
-    // Composant arme : tir du projectile
+    // Composant de l'arme : tir tendu sans chute
     // -------------------------------------------------------------
     AFRAME.registerComponent('gun', {
       schema: {
-        bulletSpeed: { type: 'number', default: 35 }
+        bulletSpeed: { type: 'number', default: 55 }
       },
 
       shoot: function () {
@@ -81,40 +81,46 @@
           this.el.object3D.getWorldPosition(spawnPos);
         }
 
-        // Direction avant de l'arme (-Z)
+        // Direction visée par le canon (-Z de l'arme)
         const forward = new THREE.Vector3(0, 0, -1);
         const worldQuat = new THREE.Quaternion();
         this.el.object3D.getWorldQuaternion(worldQuat);
         forward.applyQuaternion(worldQuat).normalize();
 
-        // Création de la balle
         const bullet = document.createElement('a-sphere');
-        bullet.setAttribute('radius', '0.05');
+        bullet.setAttribute('radius', '0.04');
         bullet.setAttribute('color', '#f1c40f');
         bullet.setAttribute('position', `${spawnPos.x} ${spawnPos.y} ${spawnPos.z}`);
-        bullet.setAttribute('dynamic-body', 'mass: 0.2; shape: sphere');
+        bullet.setAttribute('dynamic-body', 'mass: 0.1; shape: sphere');
         bullet.setAttribute('shadow', 'cast: true');
+
+        // Composant pour neutraliser la gravité sur la balle et la maintenir droite
+        bullet.setAttribute('bullet-flight', `vx: ${forward.x * this.data.bulletSpeed}; vy: ${forward.y * this.data.bulletSpeed}; vz: ${forward.z * this.data.bulletSpeed}`);
 
         scene.appendChild(bullet);
 
-        bullet.addEventListener('body-loaded', () => {
-          const impulse = new CANNON.Vec3(
-            forward.x * this.data.bulletSpeed,
-            forward.y * this.data.bulletSpeed,
-            forward.z * this.data.bulletSpeed
-          );
-          bullet.body.applyImpulse(impulse, bullet.body.position);
-        });
-
-        // Nettoyage après 3 secondes
         setTimeout(() => {
           if (bullet.parentNode) bullet.parentNode.removeChild(bullet);
         }, 3000);
       }
     });
 
+    // Maintient la vélocité constante en ligne droite
+    AFRAME.registerComponent('bullet-flight', {
+      schema: {
+        vx: { type: 'number', default: 0 },
+        vy: { type: 'number', default: 0 },
+        vz: { type: 'number', default: 0 }
+      },
+      tick: function () {
+        if (this.el.body) {
+          this.el.body.velocity.set(this.data.vx, this.data.vy, this.data.vz);
+        }
+      }
+    });
+
     // -------------------------------------------------------------
-    // Grab au Grip & Tir au Trigger
+    // Grabber avec Snap pour l'arme et Offset pour les autres
     // -------------------------------------------------------------
     AFRAME.registerComponent('physics-grabber', {
       schema: {
@@ -124,6 +130,7 @@
       init: function () {
         this.grabbedEl = null;
         this.targetEl = null;
+        this.isGun = false;
 
         this.positions = [];
         this.handWorldPos = new THREE.Vector3();
@@ -138,7 +145,6 @@
         this._tmpTargetPos = new THREE.Vector3();
         this._tmpTargetQuat = new THREE.Quaternion();
 
-        // Raycaster intersection
         this.el.addEventListener('raycaster-intersection', (e) => {
           const valid = e.detail.els.filter(el => el.classList.contains('grabbable'));
           if (valid.length > 0) this.targetEl = valid[0];
@@ -148,28 +154,35 @@
           this.targetEl = null;
         });
 
-        // Grab / Release via GRIP (ou gâchette si ce n'est pas une arme)
         const onGrab = () => {
           if (!this.targetEl || this.grabbedEl) return;
           this.grabbedEl = this.targetEl;
+          this.isGun = this.grabbedEl.hasAttribute('gun');
           this.positions = [];
 
           this.el.object3D.getWorldPosition(this.handWorldPos);
           this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
-          this.grabbedEl.object3D.getWorldPosition(this._tmpObjPos);
-          this.grabbedEl.object3D.getWorldQuaternion(this._tmpObjQuat);
+          if (this.isGun) {
+            // SNAP EN MAIN : Calibré pour que la crosse s'aligne dans le poing du joueur
+            this.grabOffsetPos.set(0, -0.04, -0.06);
+            this.grabOffsetQuat.identity();
+          } else {
+            // OBJETS CLASSIQUES : Conserve la distance et l'angle d'origine
+            this.grabbedEl.object3D.getWorldPosition(this._tmpObjPos);
+            this.grabbedEl.object3D.getWorldQuaternion(this._tmpObjQuat);
 
-          this._tmpInvHandQuat.copy(this.handWorldQuat).conjugate();
+            this._tmpInvHandQuat.copy(this.handWorldQuat).conjugate();
 
-          this.grabOffsetPos
-            .copy(this._tmpObjPos)
-            .sub(this.handWorldPos)
-            .applyQuaternion(this._tmpInvHandQuat);
+            this.grabOffsetPos
+              .copy(this._tmpObjPos)
+              .sub(this.handWorldPos)
+              .applyQuaternion(this._tmpInvHandQuat);
 
-          this.grabOffsetQuat
-            .copy(this._tmpInvHandQuat)
-            .multiply(this._tmpObjQuat);
+            this.grabOffsetQuat
+              .copy(this._tmpInvHandQuat)
+              .multiply(this._tmpObjQuat);
+          }
         };
 
         const onRelease = () => {
@@ -191,21 +204,20 @@
           }
 
           this.grabbedEl = null;
+          this.isGun = false;
           this.positions = [];
         };
 
-        // Tir au Trigger
         const onTriggerDown = () => {
-          if (this.grabbedEl && this.grabbedEl.components['gun']) {
+          if (this.grabbedEl && this.isGun) {
             this.grabbedEl.components['gun'].shoot();
           } else if (!this.grabbedEl) {
-            // Si on ne tient rien, trigger peut aussi servir à attraper
             onGrab();
           }
         };
 
         const onTriggerUp = () => {
-          if (this.grabbedEl && !this.grabbedEl.components['gun']) {
+          if (this.grabbedEl && !this.isGun) {
             onRelease();
           }
         };
@@ -259,7 +271,6 @@
       position="-3 6 4">
     </a-entity>
 
-    <!-- Sol statique -->
     <a-plane
       static-body
       position="0 0 0"
@@ -270,7 +281,7 @@
       shadow="receive: true">
     </a-plane>
 
-    <!-- TES OBJETS D'ORIGINE -->
+    <!-- Cubes & Sphère (distance et orientation libres conservées) -->
     <a-box
       class="grabbable"
       dynamic-body="mass: 2; shape: box"
@@ -300,18 +311,17 @@
       shadow="cast: true; receive: true">
     </a-sphere>
 
-    <!-- ARME À FEU (Ciblage laser garanti et physique intégrée) -->
+    <!-- Arme à feu (se snap automatiquement au creux de la main dès qu'attrapée) -->
     <a-box
       id="pistol"
       class="grabbable"
-      gun="bulletSpeed: 40"
+      gun="bulletSpeed: 50"
       dynamic-body="mass: 1.5; shape: box"
       position="0 1 -0.8"
       width="0.08" height="0.08" depth="0.32"
       color="#2c3e50"
       shadow="cast: true; receive: true">
 
-      <!-- Poignée sous le canon -->
       <a-box
         width="0.06" height="0.14" depth="0.07"
         position="0 -0.09 0.08"
@@ -319,8 +329,7 @@
         color="#7f8c8d">
       </a-box>
 
-      <!-- Sortie de canon pour les balles -->
-      <a-entity id="muzzle" position="0 0 -0.18"></a-entity>
+      <a-entity id="muzzle" position="0 0 -0.2"></a-entity>
     </a-box>
 
     <!-- Rig du joueur -->
