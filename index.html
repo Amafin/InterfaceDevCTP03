@@ -68,7 +68,7 @@
     // -------------------------------------------------------------
     AFRAME.registerComponent('gun', {
       schema: {
-        bulletSpeed: { type: 'number', default: 35 }
+        bulletSpeed: { type: 'number', default: 45 }
       },
 
       shoot: function () {
@@ -82,37 +82,58 @@
           this.el.object3D.getWorldPosition(spawnPos);
         }
 
+        // Calcule l'axe de tir réel du canon dans l'espace global
         const forward = new THREE.Vector3(0, 0, -1);
         const worldQuat = new THREE.Quaternion();
         this.el.object3D.getWorldQuaternion(worldQuat);
         forward.applyQuaternion(worldQuat).normalize();
 
         const bullet = document.createElement('a-sphere');
-        bullet.setAttribute('radius', '0.07');
+        bullet.setAttribute('radius', '0.06');
         bullet.setAttribute('color', '#f1c40f');
         bullet.setAttribute('position', `${spawnPos.x} ${spawnPos.y} ${spawnPos.z}`);
-        bullet.setAttribute('dynamic-body', 'mass: 0.5; shape: sphere');
+        bullet.setAttribute('dynamic-body', 'mass: 0.2; shape: sphere');
         bullet.setAttribute('shadow', 'cast: true');
 
+        // Ajout du composant anti-gravité sur la balle
+        bullet.setAttribute('anti-gravity-bullet', `
+          vx: ${forward.x * this.data.bulletSpeed};
+          vy: ${forward.y * this.data.bulletSpeed};
+          vz: ${forward.z * this.data.bulletSpeed}
+        `);
+
         scene.appendChild(bullet);
-
-        bullet.addEventListener('body-loaded', () => {
-          if (!bullet.body) return;
-
-          // Annule la pesanteur pour garder une trajectoire parfaitement plane
-          bullet.body.gravity = new CANNON.Vec3(0, 0, 0);
-
-          // Impulsion initiale directe dans la direction du tir
-          bullet.body.velocity.set(
-            forward.x * this.data.bulletSpeed,
-            forward.y * this.data.bulletSpeed,
-            forward.z * this.data.bulletSpeed
-          );
-        });
 
         setTimeout(() => {
           if (bullet.parentNode) bullet.parentNode.removeChild(bullet);
         }, 3000);
+      }
+    });
+
+    // Annule la pesanteur à chaque frame pour garder une trajectoire tendue
+    AFRAME.registerComponent('anti-gravity-bullet', {
+      schema: {
+        vx: { type: 'number', default: 0 },
+        vy: { type: 'number', default: 0 },
+        vz: { type: 'number', default: 0 }
+      },
+
+      init: function () {
+        this.initialized = false;
+      },
+
+      tick: function () {
+        const body = this.el.body;
+        if (!body) return;
+
+        // Impulsion initiale
+        if (!this.initialized) {
+          body.velocity.set(this.data.vx, this.data.vy, this.data.vz);
+          this.initialized = true;
+        }
+
+        // Compense la gravité globale de la scène (9.8 * masse) vers le haut
+        body.applyForce(new CANNON.Vec3(0, 9.8 * body.mass, 0), body.position);
       }
     });
 
