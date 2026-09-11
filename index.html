@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Scène A-Frame - Arme en main & Tir tendu</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <!-- Cannon.js pour A-Frame -->
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
   <script>
-    // essai
     // -------------------------------------------------------------
     // Déplacement et vue aux joysticks
     // -------------------------------------------------------------
@@ -64,11 +64,11 @@
     });
 
     // -------------------------------------------------------------
-    // Composant de l'arme : tir tendu sans chute
+    // Composant de l'arme : tir tendu sans effet de tunneling
     // -------------------------------------------------------------
     AFRAME.registerComponent('gun', {
       schema: {
-        bulletSpeed: { type: 'number', default: 30 }
+        bulletSpeed: { type: 'number', default: 35 }
       },
 
       shoot: function () {
@@ -82,41 +82,37 @@
           this.el.object3D.getWorldPosition(spawnPos);
         }
 
-        // Direction visée par le canon (-Z de l'arme)
         const forward = new THREE.Vector3(0, 0, -1);
         const worldQuat = new THREE.Quaternion();
         this.el.object3D.getWorldQuaternion(worldQuat);
         forward.applyQuaternion(worldQuat).normalize();
 
         const bullet = document.createElement('a-sphere');
-        bullet.setAttribute('radius', '0.04');
+        bullet.setAttribute('radius', '0.07');
         bullet.setAttribute('color', '#f1c40f');
         bullet.setAttribute('position', `${spawnPos.x} ${spawnPos.y} ${spawnPos.z}`);
-        bullet.setAttribute('dynamic-body', 'mass: 0.1; shape: sphere');
+        bullet.setAttribute('dynamic-body', 'mass: 0.5; shape: sphere');
         bullet.setAttribute('shadow', 'cast: true');
 
-        // Composant pour neutraliser la gravité sur la balle et la maintenir droite
-        bullet.setAttribute('bullet-flight', `vx: ${forward.x * this.data.bulletSpeed}; vy: ${forward.y * this.data.bulletSpeed}; vz: ${forward.z * this.data.bulletSpeed}`);
-
         scene.appendChild(bullet);
+
+        bullet.addEventListener('body-loaded', () => {
+          if (!bullet.body) return;
+
+          // Annule la pesanteur pour garder une trajectoire parfaitement plane
+          bullet.body.gravity = new CANNON.Vec3(0, 0, 0);
+
+          // Impulsion initiale directe dans la direction du tir
+          bullet.body.velocity.set(
+            forward.x * this.data.bulletSpeed,
+            forward.y * this.data.bulletSpeed,
+            forward.z * this.data.bulletSpeed
+          );
+        });
 
         setTimeout(() => {
           if (bullet.parentNode) bullet.parentNode.removeChild(bullet);
         }, 3000);
-      }
-    });
-
-    // Maintient la vélocité constante en ligne droite
-    AFRAME.registerComponent('bullet-flight', {
-      schema: {
-        vx: { type: 'number', default: 0 },
-        vy: { type: 'number', default: 0 },
-        vz: { type: 'number', default: 0 }
-      },
-      tick: function () {
-        if (this.el.body) {
-          this.el.body.velocity.set(this.data.vx, this.data.vy, this.data.vz);
-        }
       }
     });
 
@@ -165,13 +161,14 @@
           this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
           if (this.isGun) {
-            // SNAP EN MAIN : Calibré pour que la crosse s'aligne dans le poing du joueur
+            // Snap en main et alignement du canon vers le bas (-25°)
             this.grabOffsetPos.set(0, -0.04, -0.08);
             this.grabOffsetQuat.setFromAxisAngle(
               new THREE.Vector3(1, 0, 0),
-              THREE.MathUtils.degToRad(-25))
+              THREE.MathUtils.degToRad(-25)
+            );
           } else {
-            // OBJETS CLASSIQUES : Conserve la distance et l'angle d'origine
+            // Objets classiques : distance et orientation relatives conservées
             this.grabbedEl.object3D.getWorldPosition(this._tmpObjPos);
             this.grabbedEl.object3D.getWorldQuaternion(this._tmpObjQuat);
 
@@ -266,7 +263,8 @@
   </script>
 </head>
 <body>
-  <a-scene physics="debug: false; gravity: -9.8" renderer="shadows: enabled" background="color: #87ceeb">
+  <!-- Précision physique accrue pour éliminer les traversées de balle -->
+  <a-scene physics="debug: false; gravity: -9.8; iterations: 20; maxSubSteps: 5" renderer="shadows: enabled" background="color: #87ceeb">
 
     <a-entity light="type: ambient; color: #ffffff; intensity: 0.6"></a-entity>
     <a-entity
@@ -284,7 +282,7 @@
       shadow="receive: true">
     </a-plane>
 
-    <!-- Cubes & Sphère (distance et orientation libres conservées) -->
+    <!-- Cubes & Sphère -->
     <a-box
       class="grabbable"
       dynamic-body="mass: 2; shape: box"
@@ -314,11 +312,11 @@
       shadow="cast: true; receive: true">
     </a-sphere>
 
-    <!-- Arme à feu (se snap automatiquement au creux de la main dès qu'attrapée) -->
+    <!-- Arme à feu -->
     <a-box
       id="pistol"
       class="grabbable"
-      gun="bulletSpeed: 50"
+      gun="bulletSpeed: 35"
       dynamic-body="mass: 1.5; shape: box"
       position="0 1 -0.8"
       width="0.08" height="0.08" depth="0.32"
