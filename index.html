@@ -3,11 +3,141 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scène A-Frame - CCD Bullet & VR Gun</title>
+  <title>Scène A-Frame - Stand de tir VR & Cibles dynamiques</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <!-- Cannon.js pour A-Frame -->
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
   <script>
+    // -------------------------------------------------------------
+    // Générateur sonore d'impact synthétique (Web Audio API)
+    // -------------------------------------------------------------
+    let audioCtx = null;
+    function playHitSound() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(580, audioCtx.currentTime); // Son type cloche / gong métallique
+      osc.frequency.exponentialRampToValueAtTime(140, audioCtx.currentTime + 0.25);
+
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.25);
+    }
+
+    // -------------------------------------------------------------
+    // Cycle de vie des cibles (maintien dans la scène & nettoyage hors-limite)
+    // -------------------------------------------------------------
+    AFRAME.registerComponent('target-entity', {
+      schema: {
+        originalColor: { type: 'string', default: '#ff4444' }
+      },
+
+      init: function () {
+        this.originalColor = this.data.originalColor;
+      },
+
+      onHit: function () {
+        playHitSound();
+
+        // Flash blanc de rétroaction visuelle
+        this.el.setAttribute('material', 'color', '#ffffff');
+        setTimeout(() => {
+          if (this.el.parentNode) {
+            this.el.setAttribute('material', 'color', this.originalColor);
+          }
+        }, 120);
+      },
+
+      tick: function () {
+        if (!this.el.body) return;
+        const pos = this.el.body.position;
+
+        // Destruction uniquement si l'objet passe sous la map ou vole trop loin
+        if (pos.y < -2 || Math.abs(pos.x) > 30 || Math.abs(pos.z) > 30) {
+          setTimeout(() => {
+            if (this.el.parentNode) {
+              this.el.parentNode.removeChild(this.el);
+            }
+          }, 0);
+        }
+      }
+    });
+
+    // -------------------------------------------------------------
+    // Générateur automatique de cibles aléatoires
+    // -------------------------------------------------------------
+    AFRAME.registerComponent('target-spawner', {
+      schema: {
+        interval: { type: 'number', default: 3500 }, // délai en ms
+        maxTargets: { type: 'number', default: 8 }
+      },
+
+      init: function () {
+        this.shapes = ['box', 'cylinder', 'cone'];
+        this.colors = ['#e67e22', '#9b59b6', '#1abc9c', '#e74c3c'];
+
+        this.timer = setInterval(() => {
+          this.spawn();
+        }, this.data.interval);
+      },
+
+      spawn: function () {
+        const count = document.querySelectorAll('.target-item').length;
+        if (count >= this.data.maxTargets) return;
+
+        const shape = this.shapes[Math.floor(Math.random() * this.shapes.length)];
+        const color = this.colors[Math.floor(Math.random() * this.colors.length)];
+
+        // Position aléatoire devant le joueur
+        const posX = (Math.random() - 0.5) * 6;
+        const posY = 1.2 + Math.random() * 1.5;
+        const posZ = -3 - Math.random() * 4;
+
+        const target = document.createElement(shape === 'cone' ? 'a-cone' : (shape === 'cylinder' ? 'a-cylinder' : 'a-box'));
+        target.classList.add('grabbable', 'target-item');
+        target.setAttribute('position', `${posX} ${posY} ${posZ}`);
+        target.setAttribute('material', `color: ${color}`);
+        target.setAttribute('shadow', 'cast: true; receive: true');
+
+        if (shape === 'cone') {
+          target.setAttribute('radius-bottom', '0.35');
+          target.setAttribute('radius-top', '0.05');
+          target.setAttribute('height', '0.7');
+          target.setAttribute('dynamic-body', 'mass: 1.5; shape: cylinder');
+        } else if (shape === 'cylinder') {
+          target.setAttribute('radius', '0.3');
+          target.setAttribute('height', '0.6');
+          target.setAttribute('dynamic-body', 'mass: 1.5; shape: cylinder');
+        } else {
+          target.setAttribute('width', '0.5');
+          target.setAttribute('height', '0.5');
+          target.setAttribute('depth', '0.5');
+          target.setAttribute('dynamic-body', 'mass: 1.5; shape: box');
+        }
+
+        target.setAttribute('target-entity', `originalColor: ${color}`);
+        this.el.sceneEl.appendChild(target);
+      },
+
+      remove: function () {
+        clearInterval(this.timer);
+      }
+    });
+
     // -------------------------------------------------------------
     // Déplacement et vue aux joysticks
     // -------------------------------------------------------------
@@ -84,7 +214,6 @@
         }
         this.el.object3D.getWorldPosition(gunWorldPos);
 
-        // Vecteur de visée du canon
         const forward = new THREE.Vector3()
           .subVectors(muzzleWorldPos, gunWorldPos)
           .normalize();
@@ -95,7 +224,6 @@
         bullet.setAttribute('position', `${muzzleWorldPos.x} ${muzzleWorldPos.y} ${muzzleWorldPos.z}`);
         bullet.setAttribute('shadow', 'cast: true');
 
-        // Détection continue par rayon (Continuous Collision Detection)
         bullet.setAttribute('ray-bullet', `
           dirX: ${forward.x};
           dirY: ${forward.y};
@@ -111,7 +239,7 @@
     });
 
     // -------------------------------------------------------------
-    // Balle avec détection continue (Raycasting par frame)
+    // Détection continue par rayon & transmission des impacts
     // -------------------------------------------------------------
     AFRAME.registerComponent('ray-bullet', {
       schema: {
@@ -144,15 +272,12 @@
         const dt = Math.min(delta, 100) / 1000;
         const stepDist = this.data.speed * dt;
 
-        // Position de l'étape suivante
         this.prevPos.copy(this.el.object3D.position);
         this.currPos.copy(this.prevPos).addScaledVector(this.dir, stepDist);
 
-        // 1. Raycast entre la position précédente et la nouvelle position (CCD)
         this.raycaster.set(this.prevPos, this.dir);
         this.raycaster.far = stepDist;
 
-        // Cibles potentielles : les objets interactifs et le sol
         const hitTargets = Array.from(document.querySelectorAll('.grabbable, a-plane'));
         const hitObjects = [];
         hitTargets.forEach(el => {
@@ -168,7 +293,7 @@
             targetEl = targetEl.parentElement;
           }
 
-          // Si on touche un cube/sphère physique, on lui transmet l'impact
+          // Détection d'impact sur une entité physique
           if (targetEl && targetEl.body) {
             const hitPoint = new CANNON.Vec3(hit.point.x, hit.point.y, hit.point.z);
             const impulseForce = 14;
@@ -178,18 +303,20 @@
               this.dir.z * impulseForce
             );
             targetEl.body.applyImpulse(impulse, hitPoint);
+
+            // Alerte la cible touchée sans la détruire
+            if (targetEl.components['target-entity']) {
+              targetEl.components['target-entity'].onHit();
+            }
           }
 
-          // Déplace visuellement la balle à l'impact exact et la détruit sans freeze
           this.el.object3D.position.copy(hit.point);
           this.destroyBullet();
           return;
         }
 
-        // 2. Si aucun obstacle n'est touché, la balle avance
         this.el.object3D.position.copy(this.currPos);
 
-        // Disparition si trop bas ou trop loin
         if (this.currPos.y <= 0.05 || this.currPos.distanceTo(this.startPos) > this.data.maxDist) {
           this.destroyBullet();
         }
@@ -200,7 +327,6 @@
         this.isDead = true;
         if (this.timer) clearTimeout(this.timer);
 
-        // Différé hors de la boucle courante pour empêcher le freeze
         setTimeout(() => {
           if (this.el.parentNode) {
             this.el.parentNode.removeChild(this.el);
@@ -210,7 +336,7 @@
     });
 
     // -------------------------------------------------------------
-    // Grabber avec Snap pour l'arme et Offset pour les autres
+    // Saisie (Grip) et tir (Trigger)
     // -------------------------------------------------------------
     AFRAME.registerComponent('physics-grabber', {
       schema: {
@@ -354,7 +480,11 @@
   </script>
 </head>
 <body>
-  <a-scene physics="debug: false; gravity: -9.8" renderer="shadows: enabled" background="color: #87ceeb">
+  <a-scene
+    physics="debug: false; gravity: -9.8"
+    renderer="shadows: enabled"
+    background="color: #87ceeb"
+    target-spawner="interval: 3500; maxTargets: 8">
 
     <a-entity light="type: ambient; color: #ffffff; intensity: 0.6"></a-entity>
     <a-entity
@@ -362,7 +492,7 @@
       position="-3 6 4">
     </a-entity>
 
-    <!-- Sol -->
+    <!-- Sol statique -->
     <a-plane
       static-body
       position="0 0 0"
@@ -373,11 +503,12 @@
       shadow="receive: true">
     </a-plane>
 
-    <!-- Cubes & Sphère physiques -->
+    <!-- Cibles initiales (cubes, sphère et cône) -->
     <a-box
-      class="grabbable"
+      class="grabbable target-item"
+      target-entity="originalColor: #e74c3c"
       dynamic-body="mass: 2; shape: box"
-      position="-0.6 1.5 -1.2"
+      position="-0.6 1.5 -2"
       rotation="0 15 0"
       width="0.5" height="0.5" depth="0.5"
       color="#e74c3c"
@@ -385,9 +516,10 @@
     </a-box>
 
     <a-box
-      class="grabbable"
+      class="grabbable target-item"
+      target-entity="originalColor: #f39c12"
       dynamic-body="mass: 2; shape: box"
-      position="-0.6 0.5 -1.2"
+      position="-0.6 0.5 -2"
       rotation="0 15 0"
       width="0.5" height="0.5" depth="0.5"
       color="#f39c12"
@@ -395,13 +527,26 @@
     </a-box>
 
     <a-sphere
-      class="grabbable"
+      class="grabbable target-item"
+      target-entity="originalColor: #3498db"
       dynamic-body="mass: 2; shape: sphere"
-      position="0.6 1.2 -1.2"
+      position="0.6 1.2 -2"
       radius="0.3"
       color="#3498db"
       shadow="cast: true; receive: true">
     </a-sphere>
+
+    <a-cone
+      class="grabbable target-item"
+      target-entity="originalColor: #9b59b6"
+      dynamic-body="mass: 1.5; shape: cylinder"
+      position="0 0.5 -2.5"
+      radius-bottom="0.3"
+      radius-top="0.05"
+      height="0.6"
+      color="#9b59b6"
+      shadow="cast: true; receive: true">
+    </a-cone>
 
     <!-- Arme à feu -->
     <a-box
