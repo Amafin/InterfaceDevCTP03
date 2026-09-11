@@ -66,74 +66,119 @@
     // -------------------------------------------------------------
     // Composant de l'arme : tir tendu sans effet de tunneling
     // -------------------------------------------------------------
+    // -------------------------------------------------------------
+    // Composant de l'arme : visée parfaite & tir tendu
+    // -------------------------------------------------------------
     AFRAME.registerComponent('gun', {
       schema: {
-        bulletSpeed: { type: 'number', default: 45 }
+        bulletSpeed: { type: 'number', default: 70 } // Vitesse vive
       },
 
       shoot: function () {
         const scene = this.el.sceneEl;
         const muzzle = this.el.querySelector('#muzzle');
 
-        const spawnPos = new THREE.Vector3();
-        if (muzzle) {
-          muzzle.object3D.getWorldPosition(spawnPos);
-        } else {
-          this.el.object3D.getWorldPosition(spawnPos);
-        }
+        // Positions mondiales pour tracer l'axe précis du canon
+        const muzzleWorldPos = new THREE.Vector3();
+        const gunWorldPos = new THREE.Vector3();
 
-        // Calcule l'axe de tir réel du canon dans l'espace global
-        const forward = new THREE.Vector3(0, 0, -1);
-        const worldQuat = new THREE.Quaternion();
-        this.el.object3D.getWorldQuaternion(worldQuat);
-        forward.applyQuaternion(worldQuat).normalize();
+        if (muzzle) {
+          muzzle.object3D.getWorldPosition(muzzleWorldPos);
+        } else {
+          this.el.object3D.getWorldPosition(muzzleWorldPos);
+        }
+        this.el.object3D.getWorldPosition(gunWorldPos);
+
+        // Direction réelle : du centre du pistolet vers le bout du canon
+        const forward = new THREE.Vector3()
+          .subVectors(muzzleWorldPos, gunWorldPos)
+          .normalize();
 
         const bullet = document.createElement('a-sphere');
-        bullet.setAttribute('radius', '0.06');
+        bullet.setAttribute('radius', '0.05');
         bullet.setAttribute('color', '#f1c40f');
-        bullet.setAttribute('position', `${spawnPos.x} ${spawnPos.y} ${spawnPos.z}`);
-        bullet.setAttribute('dynamic-body', 'mass: 0.2; shape: sphere');
+        bullet.setAttribute('position', `${muzzleWorldPos.x} ${muzzleWorldPos.y} ${muzzleWorldPos.z}`);
+        bullet.setAttribute('dynamic-body', 'mass: 0.1; shape: sphere');
         bullet.setAttribute('shadow', 'cast: true');
 
-        // Ajout du composant anti-gravité sur la balle
-        bullet.setAttribute('anti-gravity-bullet', `
-          vx: ${forward.x * this.data.bulletSpeed};
-          vy: ${forward.y * this.data.bulletSpeed};
-          vz: ${forward.z * this.data.bulletSpeed}
+        // Attache le contrôleur de vol tendu et de destruction
+        bullet.setAttribute('bullet-behavior', `
+          dirX: ${forward.x};
+          dirY: ${forward.y};
+          dirZ: ${forward.z};
+          speed: ${this.data.bulletSpeed};
+          startX: ${muzzleWorldPos.x};
+          startY: ${muzzleWorldPos.y};
+          startZ: ${muzzleWorldPos.z}
         `);
 
         scene.appendChild(bullet);
-
-        setTimeout(() => {
-          if (bullet.parentNode) bullet.parentNode.removeChild(bullet);
-        }, 3000);
       }
     });
 
-    // Annule la pesanteur à chaque frame pour garder une trajectoire tendue
-    AFRAME.registerComponent('anti-gravity-bullet', {
+    // -------------------------------------------------------------
+    // Comportement de la balle : vitesse constante, suppression au sol/distance
+    // -------------------------------------------------------------
+    AFRAME.registerComponent('bullet-behavior', {
       schema: {
-        vx: { type: 'number', default: 0 },
-        vy: { type: 'number', default: 0 },
-        vz: { type: 'number', default: 0 }
+        dirX: { type: 'number', default: 0 },
+        dirY: { type: 'number', default: 0 },
+        dirZ: { type: 'number', default: 0 },
+        speed: { type: 'number', default: 70 },
+        startX: { type: 'number', default: 0 },
+        startY: { type: 'number', default: 0 },
+        startZ: { type: 'number', default: 0 },
+        maxDist: { type: 'number', default: 40 }
       },
 
       init: function () {
-        this.initialized = false;
+        this.startPos = new THREE.Vector3(this.data.startX, this.data.startY, this.data.startZ);
+        this.currentPos = new THREE.Vector3();
+
+        // 1. Disparition si la balle touche le sol ou un obstacle statique
+        this.el.addEventListener('collide', (e) => {
+          const hitEl = e.detail.body.el;
+          // Si on percute le sol (a-plane ou corps statique)
+          if (hitEl && (hitEl.tagName.toLowerCase() === 'a-plane' || hitEl.hasAttribute('static-body'))) {
+            this.destroyBullet();
+          }
+        });
+
+        // 2. Destruction automatique au bout de 2 secondes max
+        this.timer = setTimeout(() => {
+          this.destroyBullet();
+        }, 2000);
       },
 
       tick: function () {
         const body = this.el.body;
         if (!body) return;
 
-        // Impulsion initiale
-        if (!this.initialized) {
-          body.velocity.set(this.data.vx, this.data.vy, this.data.vz);
-          this.initialized = true;
+        // Maintient la vitesse exacte en ligne droite sans subir la chute
+        body.velocity.set(
+          this.data.dirX * this.data.speed,
+          this.data.dirY * this.data.speed,
+          this.data.dirZ * this.data.speed
+        );
+
+        // Disparition si la balle atteint le niveau du sol
+        if (body.position.y <= 0.08) {
+          this.destroyBullet();
+          return;
         }
 
-        // Compense la gravité globale de la scène (9.8 * masse) vers le haut
-        body.applyForce(new CANNON.Vec3(0, 9.8 * body.mass, 0), body.position);
+        // Disparition si la balle va trop loin
+        this.currentPos.set(body.position.x, body.position.y, body.position.z);
+        if (this.currentPos.distanceTo(this.startPos) > this.data.maxDist) {
+          this.destroyBullet();
+        }
+      },
+
+      destroyBullet: function () {
+        if (this.timer) clearTimeout(this.timer);
+        if (this.el.parentNode) {
+          this.el.parentNode.removeChild(this.el);
+        }
       }
     });
 
