@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Scène A-Frame - Arme en main & Tir tendu</title>
+  <title>Scène A-Frame - CCD Bullet & VR Gun</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-  <!-- Cannon.js pour A-Frame -->
   <script src="https://cdn.jsdelivr.net/gh/c-frame/aframe-physics-system@v4.2.2/dist/aframe-physics-system.min.js"></script>
 
   <script>
@@ -64,21 +63,17 @@
     });
 
     // -------------------------------------------------------------
-    // Composant de l'arme : tir tendu sans effet de tunneling
-    // -------------------------------------------------------------
-    // -------------------------------------------------------------
-    // Composant de l'arme : visée parfaite & tir tendu
+    // Composant arme : instancie la balle
     // -------------------------------------------------------------
     AFRAME.registerComponent('gun', {
       schema: {
-        bulletSpeed: { type: 'number', default: 70 } // Vitesse vive
+        bulletSpeed: { type: 'number', default: 60 }
       },
 
       shoot: function () {
         const scene = this.el.sceneEl;
         const muzzle = this.el.querySelector('#muzzle');
 
-        // Positions mondiales pour tracer l'axe précis du canon
         const muzzleWorldPos = new THREE.Vector3();
         const gunWorldPos = new THREE.Vector3();
 
@@ -89,20 +84,19 @@
         }
         this.el.object3D.getWorldPosition(gunWorldPos);
 
-        // Direction réelle : du centre du pistolet vers le bout du canon
+        // Vecteur de visée du canon
         const forward = new THREE.Vector3()
           .subVectors(muzzleWorldPos, gunWorldPos)
           .normalize();
 
         const bullet = document.createElement('a-sphere');
-        bullet.setAttribute('radius', '0.05');
+        bullet.setAttribute('radius', '0.04');
         bullet.setAttribute('color', '#f1c40f');
         bullet.setAttribute('position', `${muzzleWorldPos.x} ${muzzleWorldPos.y} ${muzzleWorldPos.z}`);
-        bullet.setAttribute('dynamic-body', 'mass: 0.1; shape: sphere');
         bullet.setAttribute('shadow', 'cast: true');
 
-        // Attache le contrôleur de vol tendu et de destruction
-        bullet.setAttribute('bullet-behavior', `
+        // Détection continue par rayon (Continuous Collision Detection)
+        bullet.setAttribute('ray-bullet', `
           dirX: ${forward.x};
           dirY: ${forward.y};
           dirZ: ${forward.z};
@@ -117,68 +111,101 @@
     });
 
     // -------------------------------------------------------------
-    // Comportement de la balle : vitesse constante, suppression au sol/distance
+    // Balle avec détection continue (Raycasting par frame)
     // -------------------------------------------------------------
-    AFRAME.registerComponent('bullet-behavior', {
+    AFRAME.registerComponent('ray-bullet', {
       schema: {
         dirX: { type: 'number', default: 0 },
         dirY: { type: 'number', default: 0 },
         dirZ: { type: 'number', default: 0 },
-        speed: { type: 'number', default: 70 },
+        speed: { type: 'number', default: 60 },
         startX: { type: 'number', default: 0 },
         startY: { type: 'number', default: 0 },
         startZ: { type: 'number', default: 0 },
-        maxDist: { type: 'number', default: 40 }
+        maxDist: { type: 'number', default: 45 }
       },
 
       init: function () {
+        this.dir = new THREE.Vector3(this.data.dirX, this.data.dirY, this.data.dirZ).normalize();
         this.startPos = new THREE.Vector3(this.data.startX, this.data.startY, this.data.startZ);
-        this.currentPos = new THREE.Vector3();
+        this.prevPos = this.startPos.clone();
+        this.currPos = this.startPos.clone();
 
-        // 1. Disparition si la balle touche le sol ou un obstacle statique
-        this.el.addEventListener('collide', (e) => {
-          const hitEl = e.detail.body.el;
-          // Si on percute le sol (a-plane ou corps statique)
-          if (hitEl && (hitEl.tagName.toLowerCase() === 'a-plane' || hitEl.hasAttribute('static-body'))) {
-            this.destroyBullet();
-          }
-        });
+        this.raycaster = new THREE.Raycaster();
+        this.isDead = false;
 
-        // 2. Destruction automatique au bout de 2 secondes max
         this.timer = setTimeout(() => {
           this.destroyBullet();
         }, 2000);
       },
 
-      tick: function () {
-        const body = this.el.body;
-        if (!body) return;
+      tick: function (time, delta) {
+        if (this.isDead) return;
+        const dt = Math.min(delta, 100) / 1000;
+        const stepDist = this.data.speed * dt;
 
-        // Maintient la vitesse exacte en ligne droite sans subir la chute
-        body.velocity.set(
-          this.data.dirX * this.data.speed,
-          this.data.dirY * this.data.speed,
-          this.data.dirZ * this.data.speed
-        );
+        // Position de l'étape suivante
+        this.prevPos.copy(this.el.object3D.position);
+        this.currPos.copy(this.prevPos).addScaledVector(this.dir, stepDist);
 
-        // Disparition si la balle atteint le niveau du sol
-        if (body.position.y <= 0.08) {
+        // 1. Raycast entre la position précédente et la nouvelle position (CCD)
+        this.raycaster.set(this.prevPos, this.dir);
+        this.raycaster.far = stepDist;
+
+        // Cibles potentielles : les objets interactifs et le sol
+        const hitTargets = Array.from(document.querySelectorAll('.grabbable, a-plane'));
+        const hitObjects = [];
+        hitTargets.forEach(el => {
+          if (el.object3D && el !== this.el) hitObjects.push(el.object3D);
+        });
+
+        const intersects = this.raycaster.intersectObjects(hitObjects, true);
+
+        if (intersects.length > 0) {
+          const hit = intersects[0];
+          let targetEl = hit.object.el;
+          while (targetEl && !targetEl.classList.contains('grabbable') && targetEl.tagName.toLowerCase() !== 'a-plane') {
+            targetEl = targetEl.parentElement;
+          }
+
+          // Si on touche un cube/sphère physique, on lui transmet l'impact
+          if (targetEl && targetEl.body) {
+            const hitPoint = new CANNON.Vec3(hit.point.x, hit.point.y, hit.point.z);
+            const impulseForce = 14;
+            const impulse = new CANNON.Vec3(
+              this.dir.x * impulseForce,
+              this.dir.y * impulseForce,
+              this.dir.z * impulseForce
+            );
+            targetEl.body.applyImpulse(impulse, hitPoint);
+          }
+
+          // Déplace visuellement la balle à l'impact exact et la détruit sans freeze
+          this.el.object3D.position.copy(hit.point);
           this.destroyBullet();
           return;
         }
 
-        // Disparition si la balle va trop loin
-        this.currentPos.set(body.position.x, body.position.y, body.position.z);
-        if (this.currentPos.distanceTo(this.startPos) > this.data.maxDist) {
+        // 2. Si aucun obstacle n'est touché, la balle avance
+        this.el.object3D.position.copy(this.currPos);
+
+        // Disparition si trop bas ou trop loin
+        if (this.currPos.y <= 0.05 || this.currPos.distanceTo(this.startPos) > this.data.maxDist) {
           this.destroyBullet();
         }
       },
 
       destroyBullet: function () {
+        if (this.isDead) return;
+        this.isDead = true;
         if (this.timer) clearTimeout(this.timer);
-        if (this.el.parentNode) {
-          this.el.parentNode.removeChild(this.el);
-        }
+
+        // Différé hors de la boucle courante pour empêcher le freeze
+        setTimeout(() => {
+          if (this.el.parentNode) {
+            this.el.parentNode.removeChild(this.el);
+          }
+        }, 0);
       }
     });
 
@@ -227,14 +254,12 @@
           this.el.object3D.getWorldQuaternion(this.handWorldQuat);
 
           if (this.isGun) {
-            // Snap en main et alignement du canon vers le bas (-25°)
             this.grabOffsetPos.set(0, -0.04, -0.08);
             this.grabOffsetQuat.setFromAxisAngle(
               new THREE.Vector3(1, 0, 0),
               THREE.MathUtils.degToRad(-25)
             );
           } else {
-            // Objets classiques : distance et orientation relatives conservées
             this.grabbedEl.object3D.getWorldPosition(this._tmpObjPos);
             this.grabbedEl.object3D.getWorldQuaternion(this._tmpObjQuat);
 
@@ -329,8 +354,7 @@
   </script>
 </head>
 <body>
-  <!-- Précision physique accrue pour éliminer les traversées de balle -->
-  <a-scene physics="debug: false; gravity: -9.8; iterations: 20; maxSubSteps: 5" renderer="shadows: enabled" background="color: #87ceeb">
+  <a-scene physics="debug: false; gravity: -9.8" renderer="shadows: enabled" background="color: #87ceeb">
 
     <a-entity light="type: ambient; color: #ffffff; intensity: 0.6"></a-entity>
     <a-entity
@@ -338,6 +362,7 @@
       position="-3 6 4">
     </a-entity>
 
+    <!-- Sol -->
     <a-plane
       static-body
       position="0 0 0"
@@ -348,7 +373,7 @@
       shadow="receive: true">
     </a-plane>
 
-    <!-- Cubes & Sphère -->
+    <!-- Cubes & Sphère physiques -->
     <a-box
       class="grabbable"
       dynamic-body="mass: 2; shape: box"
@@ -382,7 +407,7 @@
     <a-box
       id="pistol"
       class="grabbable"
-      gun="bulletSpeed: 35"
+      gun="bulletSpeed: 60"
       dynamic-body="mass: 1.5; shape: box"
       position="0 1 -0.8"
       width="0.08" height="0.08" depth="0.32"
